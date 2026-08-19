@@ -24,6 +24,7 @@ class UserService:
             username=user_data.username,
             full_name=user_data.full_name,
             hashed_password=hashed_password,
+            is_verified=False,  # User starts unverified
         )
         
         db.add(user)
@@ -41,6 +42,7 @@ class UserService:
             return None
         if not user.is_active:
             return None
+        # Allow login even if not verified (but restrict trading)
         return user
 
     @staticmethod
@@ -75,6 +77,16 @@ class UserService:
         if user:
             user.is_verified = True
             user.email_verified_at = datetime.utcnow()
+            db.commit()
+            db.refresh(user)
+        return user
+
+    @staticmethod
+    def update_password(db: Session, user_id, new_password: str) -> User:
+        """Update user's password."""
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            user.hashed_password = get_password_hash(new_password)
             db.commit()
             db.refresh(user)
         return user

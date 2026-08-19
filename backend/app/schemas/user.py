@@ -1,7 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 from datetime import datetime
-import uuid
 
 class UserBase(BaseModel):
     email: EmailStr
@@ -16,7 +15,7 @@ class UserLogin(BaseModel):
     password: str
 
 class UserResponse(UserBase):
-    id: uuid.UUID
+    id: str  # Changed from UUID to str for SQLite
     is_active: bool
     is_verified: bool
     role: str

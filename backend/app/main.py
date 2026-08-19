@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from .core.config import settings
 from .core.database import engine, Base
-from .api.v1 import auth
+from .api.v1 import auth, demo
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -33,6 +33,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth.router, prefix=settings.api_prefix)
+app.include_router(demo.router, prefix=settings.api_prefix)
 
 # Health check
 @app.get("/api/health")
