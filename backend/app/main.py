@@ -5,7 +5,14 @@ from .core.config import settings
 from .core.database import engine, Base
 from .api.v1 import auth, demo, market
 from .services.websocket_manager import ws_manager
+from .services.price_simulator import price_simulator
+from .services.price_updater import price_updater
 import asyncio
+import json
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -44,12 +51,20 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     await ws_manager.add_connection(websocket)
     
+    # Send initial prices
+    prices = price_simulator.get_all_prices()
+    for symbol, price in prices.items():
+        await websocket.send(json.dumps({
+            'type': 'price_update',
+            'symbol': symbol,
+            'price': float(price),
+            'timestamp': datetime.utcnow().isoformat()
+        }))
+    
     try:
         while True:
-            # Receive subscription messages
             data = await websocket.receive_text()
             try:
-                import json
                 message = json.loads(data)
                 if message.get('type') == 'subscribe':
                     symbol = message.get('symbol')
@@ -60,6 +75,16 @@ async def websocket_endpoint(websocket: WebSocket):
                             'symbol': symbol,
                             'message': f'Subscribed to {symbol}'
                         }))
+                        
+                        # Send current price
+                        current_price = price_simulator.get_price(symbol)
+                        if current_price:
+                            await websocket.send(json.dumps({
+                                'type': 'price_update',
+                                'symbol': symbol,
+                                'price': float(current_price),
+                                'timestamp': datetime.utcnow().isoformat()
+                            }))
                 elif message.get('type') == 'unsubscribe':
                     symbol = message.get('symbol')
                     if symbol:
@@ -99,7 +124,23 @@ async def root():
 # Startup event
 @app.on_event("startup")
 async def startup_event():
-    """Start WebSocket manager on startup."""
-    # Start WebSocket connection in background
-    asyncio.create_task(ws_manager.connect())
-    print("JADOTA AI API started with WebSocket manager")
+    """Start services on startup."""
+    # Start price simulator
+    await price_simulator.start()
+    
+    # Start price updater (updates database and broadcasts)
+    await price_updater.start()
+    
+    # Start WebSocket manager
+    ws_manager.start()
+    
+    logger.info("✅ JADOTA AI API fully started with Price Simulator, Price Updater, and WebSocket manager")
+
+# Shutdown event
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Stop services on shutdown."""
+    price_simulator.stop()
+    price_updater.stop()
+    ws_manager.stop()
+    logger.info("JADOTA AI API shutting down")

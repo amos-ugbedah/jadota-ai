@@ -1,122 +1,87 @@
 import asyncio
-import websockets
 import json
-from typing import Dict, Set, Callable, Any
+from typing import Dict, Set, Callable, Any, Optional
 from datetime import datetime
 from decimal import Decimal
-import threading
+import logging
+
+logger = logging.getLogger(__name__)
 
 class WebSocketManager:
+    """WebSocket manager that uses price simulator instead of real exchange connection."""
+    
     def __init__(self):
-        self.connections: Set[websockets.WebSocketServerProtocol] = set()
-        self.subscriptions: Dict[str, Set[websockets.WebSocketServerProtocol]] = {}
+        self.connections: Set[Any] = set()
+        self.subscriptions: Dict[str, Set[Any]] = {}
         self._running = False
-        self._task = None
+        self._task: Optional[asyncio.Task] = None
         self._callbacks: Dict[str, Callable] = {}
     
     async def connect(self):
-        """Connect to exchange WebSocket."""
+        """Skip real connection - use price simulator instead."""
+        logger.info("WebSocket manager running in SIMULATION mode (no real exchange connection)")
         self._running = True
-        uri = "wss://ws.bitget.com/v1/stream"
         
+        # Just keep running without connecting to exchange
         while self._running:
-            try:
-                async with websockets.connect(uri) as websocket:
-                    # Subscribe to ticker updates for all symbols
-                    symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"]
-                    subscribe_msg = {
-                        "op": "subscribe",
-                        "args": [{"channel": "ticker", "instId": sym} for sym in symbols]
-                    }
-                    await websocket.send(json.dumps(subscribe_msg))
-                    print(f"WebSocket connected, subscribed to {len(symbols)} symbols")
-                    
-                    async for message in websocket:
-                        await self._handle_message(message)
-            except websockets.exceptions.ConnectionClosed:
-                print("WebSocket connection closed, reconnecting...")
-                await asyncio.sleep(5)
-            except Exception as e:
-                print(f"WebSocket error: {e}")
-                await asyncio.sleep(5)
+            await asyncio.sleep(60)  # Check periodically if still running
     
     async def _handle_message(self, message: str):
-        """Handle incoming WebSocket messages."""
-        try:
-            data = json.loads(message)
-            
-            # Check if it's a ticker update
-            if 'data' in data and isinstance(data['data'], list):
-                for item in data['data']:
-                    if 'instId' in item and 'lastPr' in item:
-                        symbol = item['instId']
-                        price = Decimal(str(item['lastPr']))
-                        
-                        # Call registered callbacks
-                        if symbol in self._callbacks:
-                            await self._callbacks[symbol](symbol, price)
-                        
-                        # Broadcast to subscribed clients
-                        if symbol in self.subscriptions:
-                            for client in self.subscriptions[symbol]:
-                                try:
-                                    await client.send(json.dumps({
-                                        'type': 'price_update',
-                                        'symbol': symbol,
-                                        'price': float(price),
-                                        'timestamp': datetime.utcnow().isoformat()
-                                    }))
-                                except:
-                                    pass
-        except json.JSONDecodeError:
-            pass
-        except Exception as e:
-            print(f"Error handling WebSocket message: {e}")
+        """Handle incoming messages (not used in simulation mode)."""
+        pass
     
     def register_callback(self, symbol: str, callback: Callable):
         """Register a callback for price updates."""
         self._callbacks[symbol] = callback
+        logger.info(f"Registered callback for {symbol}")
     
-    async def subscribe_client(self, client: websockets.WebSocketServerProtocol, symbol: str):
+    async def subscribe_client(self, client: Any, symbol: str):
         """Subscribe a client to price updates for a symbol."""
         if symbol not in self.subscriptions:
             self.subscriptions[symbol] = set()
         self.subscriptions[symbol].add(client)
+        logger.info(f"Client subscribed to {symbol}")
     
-    async def unsubscribe_client(self, client: websockets.WebSocketServerProtocol, symbol: str):
+    async def unsubscribe_client(self, client: Any, symbol: str):
         """Unsubscribe a client from price updates."""
         if symbol in self.subscriptions:
             self.subscriptions[symbol].discard(client)
+            logger.info(f"Client unsubscribed from {symbol}")
     
-    async def add_connection(self, client: websockets.WebSocketServerProtocol):
+    async def add_connection(self, client: Any):
         """Add a new client connection."""
         self.connections.add(client)
+        logger.info(f"New WebSocket connection (total: {len(self.connections)})")
     
-    async def remove_connection(self, client: websockets.WebSocketServerProtocol):
+    async def remove_connection(self, client: Any):
         """Remove a client connection."""
         self.connections.discard(client)
         # Remove from all subscriptions
-        for symbol in self.subscriptions:
+        for symbol in list(self.subscriptions.keys()):
             self.subscriptions[symbol].discard(client)
+        logger.info(f"WebSocket connection removed (remaining: {len(self.connections)})")
     
     async def broadcast(self, message: dict):
         """Broadcast message to all connected clients."""
-        for client in self.connections:
+        for client in list(self.connections):
             try:
                 await client.send(json.dumps(message))
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to send to client: {e}")
+                self.connections.discard(client)
     
     def start(self):
-        """Start the WebSocket connection in a background task."""
+        """Start the WebSocket manager."""
         if not self._running:
-            asyncio.create_task(self.connect())
-            print("WebSocket manager started")
+            self._task = asyncio.create_task(self.connect())
+            logger.info("WebSocket manager started (simulation mode)")
     
     def stop(self):
-        """Stop the WebSocket connection."""
+        """Stop the WebSocket manager."""
         self._running = False
-        print("WebSocket manager stopped")
+        if self._task:
+            self._task.cancel()
+        logger.info("WebSocket manager stopped")
 
 # Create singleton instance
 ws_manager = WebSocketManager()

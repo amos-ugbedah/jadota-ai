@@ -29,10 +29,8 @@ class MarketService:
     
     def get_symbol(self, symbol: str) -> str:
         """Convert symbol to exchange format."""
-        # If symbol already has '/', return as is
         if '/' in symbol:
             return symbol
-        # Otherwise, add '/USDT'
         return f"{symbol}/USDT"
     
     def get_symbol_from_exchange(self, exchange_symbol: str) -> str:
@@ -106,7 +104,6 @@ class MarketService:
         count = 0
         
         for candle in data:
-            # Check if data already exists
             existing = db.query(OHLCV).filter(
                 OHLCV.symbol == symbol,
                 OHLCV.interval == interval,
@@ -137,7 +134,6 @@ class MarketService:
         if price is None:
             return False
         
-        # Get or create current price record
         current = db.query(CurrentPrice).filter(
             CurrentPrice.symbol == symbol
         ).first()

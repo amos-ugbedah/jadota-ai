@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, func
 from decimal import Decimal
 from datetime import datetime
+from typing import List, Optional
 from ..models.user import User
 from ..models.demo_account import DemoAccount
 from ..models.position import Position
@@ -25,7 +26,7 @@ class DemoService:
         return account
 
     @staticmethod
-    def get_account(db: Session, user_id: str) -> DemoAccount:
+    def get_account(db: Session, user_id: str) -> Optional[DemoAccount]:
         """Get user's demo account."""
         return db.query(DemoAccount).filter(DemoAccount.user_id == user_id).first()
 
@@ -132,7 +133,6 @@ class DemoService:
             account.total_return = ((account.current_balance - account.initial_balance) / account.initial_balance) * 100
             
             # Update profit factor
-            # Simplified: total wins / total losses
             if account.losing_trades > 0:
                 account.profit_factor = account.winning_trades / account.losing_trades
             else:
@@ -144,7 +144,7 @@ class DemoService:
         return position
 
     @staticmethod
-    def update_positions(db: Session, symbol: str, current_price: Decimal):
+    def update_positions(db: Session, symbol: str, current_price: Decimal) -> List[Position]:
         """Update all positions with current price."""
         positions = db.query(Position).filter(
             Position.symbol == symbol,
@@ -163,19 +163,15 @@ class DemoService:
             # Check stop loss
             if position.stop_loss_price:
                 if position.side == "LONG" and current_price <= position.stop_loss_price:
-                    # Trigger stop loss
                     DemoService.close_position(db, position.user_id, position.id, current_price)
                 elif position.side == "SHORT" and current_price >= position.stop_loss_price:
-                    # Trigger stop loss
                     DemoService.close_position(db, position.user_id, position.id, current_price)
             
             # Check take profit
             if position.take_profit_price:
                 if position.side == "LONG" and current_price >= position.take_profit_price:
-                    # Trigger take profit
                     DemoService.close_position(db, position.user_id, position.id, current_price)
                 elif position.side == "SHORT" and current_price <= position.take_profit_price:
-                    # Trigger take profit
                     DemoService.close_position(db, position.user_id, position.id, current_price)
         
         db.commit()
