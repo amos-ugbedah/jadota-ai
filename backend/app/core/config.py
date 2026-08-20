@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     api_prefix: str = Field(default="/api/v1", env="API_PREFIX")
     frontend_url: str = Field(default="http://localhost:5173", env="FRONTEND_URL")
     cors_origins: List[str] = Field(default=["http://localhost:5173"], env="CORS_ORIGINS")
+    allowed_hosts: List[str] = Field(default=["localhost", "127.0.0.1"], env="ALLOWED_HOSTS")
     
     # Database
     database_url: str = Field(..., env="DATABASE_URL")
