@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from .core.config import settings
 from .core.database import engine, Base
-from .api.v1 import auth, demo, market, ai, backtest, risk, exchange, live_trading, subscription, admin
+from .api.v1 import auth, demo, market, ai, backtest, risk, exchange, live_trading, subscription, admin, notification
 from .services.websocket_manager import ws_manager
 from .services.price_simulator import price_simulator
 from .services.price_updater import price_updater
@@ -55,6 +55,7 @@ app.include_router(exchange.router, prefix=settings.api_prefix)
 app.include_router(live_trading.router, prefix=settings.api_prefix)
 app.include_router(subscription.router, prefix=settings.api_prefix)
 app.include_router(admin.router, prefix=settings.api_prefix)
+app.include_router(notification.router, prefix=settings.api_prefix)
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -133,7 +134,7 @@ async def startup_event():
     await price_updater.start()
     ws_manager.start()
     await payment_watcher.start()
-    logger.info("✅ JADOTA AI API fully started with Admin Dashboard")
+    logger.info("✅ JADOTA AI API fully started with Notifications")
 
 @app.on_event("shutdown")
 async def shutdown_event():

@@ -9,6 +9,7 @@ from .exchange import ExchangeAccount, ExchangeOrder, ExchangeBalance
 from .live_trading import LiveAccount, LivePosition, LiveTrade
 from .subscription import SubscriptionPlan, Subscription, Payment, SubscriptionAccess
 from .admin import SystemLog, SystemMetric, AdminAction
+from .notification import Notification, NotificationPreference, EmailLog
 
 __all__ = [
     'User',
@@ -33,5 +34,8 @@ __all__ = [
     'SubscriptionAccess',
     'SystemLog',
     'SystemMetric',
-    'AdminAction'
+    'AdminAction',
+    'Notification',
+    'NotificationPreference',
+    'EmailLog'
 ]
