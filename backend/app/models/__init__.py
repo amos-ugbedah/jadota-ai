@@ -6,6 +6,7 @@ from .market_data import OHLCV, CurrentPrice
 from .backtest import BacktestRun
 from .risk import RiskSettings, RiskEvent, CapitalTracker
 from .exchange import ExchangeAccount, ExchangeOrder, ExchangeBalance
+from .live_trading import LiveAccount, LivePosition, LiveTrade
 
 __all__ = [
     'User',
@@ -20,5 +21,8 @@ __all__ = [
     'CapitalTracker',
     'ExchangeAccount',
     'ExchangeOrder',
-    'ExchangeBalance'
+    'ExchangeBalance',
+    'LiveAccount',
+    'LivePosition',
+    'LiveTrade'
 ]
