@@ -3,10 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from .core.config import settings
 from .core.database import engine, Base
-from .api.v1 import auth, demo, market, ai, backtest, risk, exchange, live_trading
+from .api.v1 import auth, demo, market, ai, backtest, risk, exchange, live_trading, subscription, admin
 from .services.websocket_manager import ws_manager
 from .services.price_simulator import price_simulator
 from .services.price_updater import price_updater
+from .services.subscription_service import subscription_service
+from .workers.payment_watcher import payment_watcher
 import asyncio
 import json
 import logging
@@ -14,10 +16,15 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Create tables
 Base.metadata.create_all(bind=engine)
 
-# Initialize FastAPI
+# Initialize subscription plans
+with engine.connect() as conn:
+    from sqlalchemy.orm import Session
+    db = Session(bind=conn)
+    subscription_service.initialize_plans(db)
+    db.close()
+
 app = FastAPI(
     title="JADOTA AI API",
     version="1.0.0",
@@ -25,7 +32,6 @@ app = FastAPI(
     redoc_url="/api/redoc",
 )
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -34,13 +40,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Trusted Host
 app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=["*"] if settings.debug else settings.cors_origins,
 )
 
-# Include routers
 app.include_router(auth.router, prefix=settings.api_prefix)
 app.include_router(demo.router, prefix=settings.api_prefix)
 app.include_router(market.router, prefix=settings.api_prefix)
@@ -49,8 +53,9 @@ app.include_router(backtest.router, prefix=settings.api_prefix)
 app.include_router(risk.router, prefix=settings.api_prefix)
 app.include_router(exchange.router, prefix=settings.api_prefix)
 app.include_router(live_trading.router, prefix=settings.api_prefix)
+app.include_router(subscription.router, prefix=settings.api_prefix)
+app.include_router(admin.router, prefix=settings.api_prefix)
 
-# WebSocket endpoint
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -105,7 +110,6 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         await ws_manager.remove_connection(websocket)
 
-# Health check
 @app.get("/api/health")
 async def health_check():
     return {
@@ -115,7 +119,6 @@ async def health_check():
         "version": "1.0.0"
     }
 
-# Root
 @app.get("/")
 async def root():
     return {
@@ -124,18 +127,18 @@ async def root():
         "health": "/api/health"
     }
 
-# Startup event
 @app.on_event("startup")
 async def startup_event():
     await price_simulator.start()
     await price_updater.start()
     ws_manager.start()
-    logger.info("✅ JADOTA AI API fully started with Live Trading Engine")
+    await payment_watcher.start()
+    logger.info("✅ JADOTA AI API fully started with Admin Dashboard")
 
-# Shutdown event
 @app.on_event("shutdown")
 async def shutdown_event():
     price_simulator.stop()
     price_updater.stop()
     ws_manager.stop()
+    payment_watcher.stop()
     logger.info("JADOTA AI API shutting down")

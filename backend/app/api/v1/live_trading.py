@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
-from decimal import Decimal
 
 from ...core.database import get_db
 from ...schemas.live_trading import (
@@ -12,6 +11,7 @@ from ...schemas.live_trading import (
 from ...services.live_trading_service import live_trading_service
 from ...api.dependencies import get_current_user
 from ...models.user import User
+from ...models.live_trading import LiveAccount
 
 router = APIRouter(prefix="/live", tags=["Live Trading"])
 
@@ -21,7 +21,6 @@ async def create_live_account(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Create a live trading account."""
     try:
         account = await live_trading_service.create_live_account(
             db,
@@ -42,7 +41,6 @@ async def get_live_account(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Get live trading account."""
     account = db.query(LiveAccount).filter(
         LiveAccount.user_id == current_user.id,
         LiveAccount.is_active == True
@@ -61,7 +59,6 @@ async def get_open_positions(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Get open positions."""
     positions = await live_trading_service.get_open_positions(db, current_user.id)
     return positions
 
@@ -71,7 +68,6 @@ async def get_trade_history(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Get trade history."""
     trades = await live_trading_service.get_trade_history(db, current_user.id, limit)
     return trades
 
@@ -81,7 +77,6 @@ async def execute_trade(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Execute a live trade."""
     try:
         result = await live_trading_service.execute_trade(
             db, current_user.id, trade_request
@@ -99,7 +94,6 @@ async def close_position(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Close an open position."""
     try:
         result = await live_trading_service.close_position(
             db, current_user.id, close_request
@@ -117,7 +111,6 @@ async def pause_trading(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Pause live trading."""
     account = db.query(LiveAccount).filter(
         LiveAccount.user_id == current_user.id,
         LiveAccount.is_active == True
@@ -140,7 +133,6 @@ async def resume_trading(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Resume live trading."""
     account = db.query(LiveAccount).filter(
         LiveAccount.user_id == current_user.id,
         LiveAccount.is_active == True

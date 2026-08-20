@@ -5,8 +5,8 @@ from decimal import Decimal
 
 class LiveAccountCreate(BaseModel):
     exchange_account_id: str
-    initial_capital: Decimal = Field(..., description="Starting capital")
-    protected_capital: Decimal = Field(..., description="Protected capital (cannot be traded)")
+    initial_capital: Decimal
+    protected_capital: Decimal
 
 class LiveAccountResponse(BaseModel):
     id: str
@@ -67,7 +67,7 @@ class LiveTradeResponse(BaseModel):
 
 class ExecuteTradeRequest(BaseModel):
     symbol: str
-    side: str  # LONG, SHORT
+    side: str
     entry_price: Optional[Decimal]
     quantity: Decimal
     stop_loss_price: Optional[Decimal]
