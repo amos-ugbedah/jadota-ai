@@ -14,22 +14,29 @@ class Settings(BaseSettings):
     api_version: str = Field(default="v1", env="API_VERSION")
     api_prefix: str = Field(default="/api/v1", env="API_PREFIX")
     frontend_url: str = Field(default="http://localhost:5173", env="FRONTEND_URL")
-    cors_origins: List[str] = Field(default=["http://localhost:5173"], env="CORS_ORIGINS")
-    allowed_hosts: List[str] = Field(default=["localhost", "127.0.0.1"], env="ALLOWED_HOSTS")
+    cors_origins: List[str] = Field(default=["*"], env="CORS_ORIGINS")
+    allowed_hosts: List[str] = Field(default=["*"], env="ALLOWED_HOSTS")
     
     # Database
-    database_url: str = Field(..., env="DATABASE_URL")
+    database_url: str = Field(default="sqlite:////tmp/jadota.db", env="DATABASE_URL")
     database_pool_size: int = Field(default=20, env="DATABASE_POOL_SIZE")
     
-    # Firebase (instead of Supabase)
+    # Firebase - ALL fields
     firebase_api_key: Optional[str] = Field(None, env="FIREBASE_API_KEY")
     firebase_auth_domain: Optional[str] = Field(None, env="FIREBASE_AUTH_DOMAIN")
     firebase_project_id: Optional[str] = Field(None, env="FIREBASE_PROJECT_ID")
     firebase_storage_bucket: Optional[str] = Field(None, env="FIREBASE_STORAGE_BUCKET")
     firebase_messaging_sender_id: Optional[str] = Field(None, env="FIREBASE_MESSAGING_SENDER_ID")
     firebase_app_id: Optional[str] = Field(None, env="FIREBASE_APP_ID")
+    firebase_measurement_id: Optional[str] = Field(None, env="FIREBASE_MEASUREMENT_ID")
+    firebase_private_key_id: Optional[str] = Field(None, env="FIREBASE_PRIVATE_KEY_ID")
     firebase_private_key: Optional[str] = Field(None, env="FIREBASE_PRIVATE_KEY")
     firebase_client_email: Optional[str] = Field(None, env="FIREBASE_CLIENT_EMAIL")
+    firebase_client_id: Optional[str] = Field(None, env="FIREBASE_CLIENT_ID")
+    firebase_auth_uri: Optional[str] = Field(None, env="FIREBASE_AUTH_URI")
+    firebase_token_uri: Optional[str] = Field(None, env="FIREBASE_TOKEN_URI")
+    firebase_auth_provider_cert_url: Optional[str] = Field(None, env="FIREBASE_AUTH_PROVIDER_CERT_URL")
+    firebase_client_cert_url: Optional[str] = Field(None, env="FIREBASE_CLIENT_CERT_URL")
     
     # Redis
     redis_url: str = Field(default="redis://localhost:6379/0", env="REDIS_URL")
@@ -100,5 +107,6 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+        extra = "ignore"  # This ignores extra fields
 
 settings = Settings()
