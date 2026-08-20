@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from .core.config import settings
 from .core.database import engine, Base
-from .api.v1 import auth, demo, market, ai, backtest, risk
+from .api.v1 import auth, demo, market, ai, backtest, risk, exchange
 from .services.websocket_manager import ws_manager
 from .services.price_simulator import price_simulator
 from .services.price_updater import price_updater
@@ -47,6 +47,7 @@ app.include_router(market.router, prefix=settings.api_prefix)
 app.include_router(ai.router, prefix=settings.api_prefix)
 app.include_router(backtest.router, prefix=settings.api_prefix)
 app.include_router(risk.router, prefix=settings.api_prefix)
+app.include_router(exchange.router, prefix=settings.api_prefix)
 
 # WebSocket endpoint
 @app.websocket("/ws")
@@ -128,7 +129,7 @@ async def startup_event():
     await price_simulator.start()
     await price_updater.start()
     ws_manager.start()
-    logger.info("✅ JADOTA AI API fully started with Risk Management")
+    logger.info("✅ JADOTA AI API fully started with Exchange Integration")
 
 # Shutdown event
 @app.on_event("shutdown")
