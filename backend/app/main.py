@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from .core.config import settings
 from .core.database import engine, Base
-from .core.rate_limiter import limiter, rate_limit_middleware
+from .core.rate_limiter import limiter, setup_rate_limiter
 from .core.security_headers import setup_security_headers
 from .api.v1 import auth, demo, market, ai, backtest, risk, exchange, live_trading, subscription, admin, notification
 from .services.websocket_manager import ws_manager
@@ -11,6 +11,7 @@ from .services.price_simulator import price_simulator
 from .services.price_updater import price_updater
 from .services.subscription_service import subscription_service
 from .workers.payment_watcher import payment_watcher
+from slowapi.middleware import SlowAPIMiddleware
 import asyncio
 import json
 import logging
@@ -35,16 +36,19 @@ app = FastAPI(
     redoc_url="/api/redoc",
 )
 
+# Setup rate limiter
+setup_rate_limiter(app)
+
 # Add rate limiting middleware
-app.add_middleware(rate_limit_middleware)
+app.add_middleware(SlowAPIMiddleware)
 
 # Add security headers
 setup_security_headers(app)
 
-# CORS - Allow Render domain
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=settings.cors_origins or ["*"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
@@ -52,7 +56,7 @@ app.add_middleware(
     max_age=600,
 )
 
-# Trusted Host - Allow Render domain
+# Trusted Host
 app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=settings.allowed_hosts or ["*"],
