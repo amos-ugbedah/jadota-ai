@@ -1,8 +1,11 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from .core.config import settings
 from .core.database import engine, Base
+from .core.rate_limiter import limiter, rate_limit_middleware
+from .core.security_headers import setup_security_headers
+from .core.ip_whitelist import whitelist
 from .api.v1 import auth, demo, market, ai, backtest, risk, exchange, live_trading, subscription, admin, notification
 from .services.websocket_manager import ws_manager
 from .services.price_simulator import price_simulator
@@ -16,6 +19,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Create tables
 Base.metadata.create_all(bind=engine)
 
 # Initialize subscription plans
@@ -32,19 +36,33 @@ app = FastAPI(
     redoc_url="/api/redoc",
 )
 
+# Add rate limiting middleware
+app.add_middleware(rate_limit_middleware)
+
+# Add security headers
+setup_security_headers(app)
+
+# Add IP whitelist for admin endpoints (if enabled)
+# app.add_middleware(whitelist.create_middleware(enabled=False))
+
+# CORS - Only allow trusted origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
+    expose_headers=["X-Request-ID"],
+    max_age=600,
 )
 
+# Trusted Host
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["*"] if settings.debug else settings.cors_origins,
+    allowed_hosts=settings.cors_origins if not settings.debug else ["*"],
 )
 
+# Include routers
 app.include_router(auth.router, prefix=settings.api_prefix)
 app.include_router(demo.router, prefix=settings.api_prefix)
 app.include_router(market.router, prefix=settings.api_prefix)
@@ -57,6 +75,31 @@ app.include_router(subscription.router, prefix=settings.api_prefix)
 app.include_router(admin.router, prefix=settings.api_prefix)
 app.include_router(notification.router, prefix=settings.api_prefix)
 
+# Health check with rate limiting disabled
+@app.get("/api/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "app": settings.app_name,
+        "environment": settings.app_env,
+        "version": "1.0.0",
+        "security": {
+            "rate_limiting": "enabled",
+            "headers": "enabled",
+            "cors": "configured"
+        }
+    }
+
+@app.get("/")
+async def root():
+    return {
+        "message": "Welcome to JADOTA AI API",
+        "docs": "/api/docs",
+        "health": "/api/health",
+        "security": "enabled"
+    }
+
+# WebSocket endpoint
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -111,30 +154,13 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         await ws_manager.remove_connection(websocket)
 
-@app.get("/api/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "app": settings.app_name,
-        "environment": settings.app_env,
-        "version": "1.0.0"
-    }
-
-@app.get("/")
-async def root():
-    return {
-        "message": "Welcome to JADOTA AI API",
-        "docs": "/api/docs",
-        "health": "/api/health"
-    }
-
 @app.on_event("startup")
 async def startup_event():
     await price_simulator.start()
     await price_updater.start()
     ws_manager.start()
     await payment_watcher.start()
-    logger.info("✅ JADOTA AI API fully started with Notifications")
+    logger.info("✅ JADOTA AI API fully started with Security Hardening")
 
 @app.on_event("shutdown")
 async def shutdown_event():

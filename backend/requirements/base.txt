@@ -34,3 +34,6 @@ email-validator==2.1.0
 ccxt==4.1.50
 websockets==12.0
 aiohttp==3.9.1
+slowapi==0.1.9
+python-json-logger==2.0.7
+secure==0.3.0
