@@ -39,3 +39,4 @@ htmlcov/
 
 # Docker
 *.pid
+backend/ServiceAccountKey.json
