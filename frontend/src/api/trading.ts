@@ -1,5 +1,6 @@
 import { apiClient } from './client';
 
+// ============ Types ============
 export interface Position {
   id: string;
   symbol: string;
@@ -34,6 +35,7 @@ export interface OrderRequest {
   price?: number;
   stopLoss?: number;
   takeProfit?: number;
+  mode?: 'demo' | 'live';
 }
 
 export interface Balance {
@@ -42,7 +44,14 @@ export interface Balance {
   locked: number;
 }
 
+export interface OrderResponse extends Trade {
+  orderId: string;
+  clientOrderId?: string;
+}
+
+// ============ API Functions ============
 export const tradingApi = {
+  // 📊 Positions
   getPositions: () =>
     apiClient.get<Position[]>('/trading/positions'),
   
@@ -52,21 +61,44 @@ export const tradingApi = {
   closePosition: (id: string) =>
     apiClient.post(`/trading/positions/${id}/close`),
   
-  getTradeHistory: (params?: { symbol?: string; limit?: number }) =>
+  // 📈 Trade History
+  getTradeHistory: (params?: { symbol?: string; limit?: number; offset?: number }) =>
     apiClient.get<Trade[]>('/trading/history', { params }),
   
+  // 🛒 Orders
   placeOrder: (data: OrderRequest) =>
     apiClient.post<Trade>('/trading/orders', data),
+  
+  placeDemoOrder: (data: OrderRequest) =>
+    apiClient.post<Trade>('/demo/positions', data),
   
   cancelOrder: (id: string) =>
     apiClient.post(`/trading/orders/${id}/cancel`),
   
+  getOpenOrders: () =>
+    apiClient.get<Trade[]>('/trading/orders/open'),
+  
+  // 💰 Balance
   getBalance: () =>
     apiClient.get<Balance>('/trading/balance'),
   
-  getOpenOrders: () =>
-    apiClient.get<Trade[]>('/trading/orders/open'),
+  getDemoBalance: () =>
+    apiClient.get<Balance>('/demo/balance'),
+  
+  // 📊 Performance
+  getPerformance: () =>
+    apiClient.get<{
+      totalPnl: number;
+      totalReturn: number;
+      winRate: number;
+      profitFactor: number;
+      maxDrawdown: number;
+      sharpeRatio: number;
+      totalTrades: number;
+      winningTrades: number;
+      losingTrades: number;
+    }>('/trading/performance'),
 };
 
-// ✅ Make sure Balance is exported
-export type { Position, Trade, Balance };
+// ============ Explicit Exports ============
+export type { Position, Trade, Balance, OrderRequest, OrderResponse };
