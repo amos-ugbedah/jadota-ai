@@ -5,9 +5,14 @@ import {
   TrendingUp,
   TrendingDown,
   Zap,
+  Brain,
+  Sparkles,
 } from 'lucide-react';
 import { useOHLCV } from '@/hooks/useOHLCV';
-import CandlestickChart from '@/components/Charts/CandlestickChart';
+import { useAISignals } from '@/hooks/useAISignals';
+import CandlestickChart, {
+  type TradeMarker,
+} from '@/components/Charts/CandlestickChart';
 import { RSIPanel, MACDPanel } from '@/components/Charts/TechnicalIndicators';
 import ChartToolbar, {
   type ChartOverlayState,
@@ -25,6 +30,7 @@ const MarketChart: React.FC = () => {
   });
   const [showRSI, setShowRSI] = useState(false);
   const [showMACD, setShowMACD] = useState(false);
+  const [showAISignals, setShowAISignals] = useState(true);
 
   const { candles, loading, error, lastUpdate, refresh } = useOHLCV({
     symbol,
@@ -33,29 +39,58 @@ const MarketChart: React.FC = () => {
     refreshInterval: 15000,
   });
 
+  const {
+    signals,
+    loading: signalsLoading,
+    lastUpdate: signalsUpdate,
+    refresh: refreshSignals,
+  } = useAISignals({
+    refreshInterval: 60000,
+    enabled: showAISignals,
+  });
+
   const toggleOverlay = (key: keyof ChartOverlayState) =>
     setOverlays((prev) => ({ ...prev, [key]: !prev[key] }));
 
-  // Header stats derived from candles
+  const handleRefresh = async () => {
+    await Promise.all([refresh(), showAISignals ? refreshSignals() : Promise.resolve()]);
+  };
+
+  // Header stats from candles
   const stats = useMemo(() => {
     if (candles.length === 0) return null;
     const last = candles[candles.length - 1];
     const prev = candles[candles.length - 2] ?? last;
     const change = last.close - prev.close;
     const changePct = prev.close !== 0 ? (change / prev.close) * 100 : 0;
-
     const window = candles.slice(-24);
     const high24h = Math.max(...window.map((c) => c.high));
     const low24h = Math.min(...window.map((c) => c.low));
-
-    return {
-      price: last.close,
-      change,
-      changePct,
-      high24h,
-      low24h,
-    };
+    return { price: last.close, change, changePct, high24h, low24h };
   }, [candles]);
+
+  // Current signal for the selected symbol
+  const currentSignal = signals[symbol];
+
+  // 🔥 Build chart markers from the current AI signal
+  const markers: TradeMarker[] = useMemo(() => {
+    if (!showAISignals || !currentSignal) return [];
+    if (currentSignal.signal === 'HOLD') return [];
+    if (candles.length === 0) return [];
+
+    const lastCandle = candles[candles.length - 1];
+    const isBuy = currentSignal.signal === 'BUY';
+
+    return [
+      {
+        time: lastCandle.time,
+        position: isBuy ? 'belowBar' : 'aboveBar',
+        color: isBuy ? '#10b981' : '#ef4444',
+        shape: isBuy ? 'arrowUp' : 'arrowDown',
+        text: `${currentSignal.signal} ${currentSignal.confidence}%`,
+      },
+    ];
+  }, [candles, currentSignal, showAISignals]);
 
   const positive = (stats?.changePct ?? 0) >= 0;
 
@@ -74,11 +109,13 @@ const MarketChart: React.FC = () => {
         </div>
 
         <button
-          onClick={refresh}
-          disabled={loading}
+          onClick={handleRefresh}
+          disabled={loading || signalsLoading}
           className="flex items-center gap-2 px-4 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-gray-300 hover:text-white hover:border-[#3a3a5a] transition disabled:opacity-50 self-start"
         >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          <RefreshCw
+            className={`w-4 h-4 ${loading || signalsLoading ? 'animate-spin' : ''}`}
+          />
           Refresh
         </button>
       </div>
@@ -116,23 +153,72 @@ const MarketChart: React.FC = () => {
               {stats.changePct.toFixed(2)}%)
             </div>
 
+            {/* 🔥 AI Signal badge */}
+            {showAISignals && currentSignal && currentSignal.signal !== 'HOLD' && (
+              <div
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold border ${
+                  currentSignal.signal === 'BUY'
+                    ? 'bg-green-500/10 text-green-400 border-green-500/30'
+                    : 'bg-red-500/10 text-red-400 border-red-500/30'
+                }`}
+                title={currentSignal.reasoning}
+              >
+                <Brain className="w-4 h-4" />
+                AI: {currentSignal.signal} ({currentSignal.confidence}%)
+              </div>
+            )}
+
+            {showAISignals && currentSignal && currentSignal.signal === 'HOLD' && (
+              <div className="flex items-center gap-2 px-3 py-2 text-sm font-semibold text-gray-400 border rounded-lg bg-gray-500/10 border-gray-500/30">
+                <Brain className="w-4 h-4" />
+                AI: HOLD
+              </div>
+            )}
+
             <div className="grid grid-cols-2 ml-auto text-sm gap-x-8 gap-y-1">
               <div className="text-gray-500">24h High</div>
               <div className="font-medium text-right text-white">
-                ${stats.high24h.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                $
+                {stats.high24h.toLocaleString(undefined, {
+                  maximumFractionDigits: 2,
+                })}
               </div>
               <div className="text-gray-500">24h Low</div>
               <div className="font-medium text-right text-white">
-                ${stats.low24h.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                $
+                {stats.low24h.toLocaleString(undefined, {
+                  maximumFractionDigits: 2,
+                })}
               </div>
             </div>
 
             {lastUpdate && (
               <div className="w-full text-xs text-gray-500 lg:w-auto">
                 Updated {lastUpdate.toLocaleTimeString()}
+                {signalsUpdate && showAISignals && (
+                  <span className="ml-2 text-gray-600">
+                    · AI: {signalsUpdate.toLocaleTimeString()}
+                  </span>
+                )}
               </div>
             )}
           </div>
+
+          {/* AI reasoning strip */}
+          {showAISignals && currentSignal && currentSignal.signal !== 'HOLD' && (
+            <div className="mt-4 pt-4 border-t border-[#2a2a4a] flex items-start gap-2">
+              <Sparkles className="w-4 h-4 text-[#6366f1] flex-shrink-0 mt-0.5" />
+              <div className="text-xs text-gray-400">
+                <span className="font-medium text-white">AI reasoning: </span>
+                {currentSignal.reasoning || 'No specific reasoning provided'}
+                {currentSignal.risk_reward > 0 && (
+                  <span className="ml-2 text-gray-500">
+                    · R:R {currentSignal.risk_reward.toFixed(2)}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -148,6 +234,8 @@ const MarketChart: React.FC = () => {
         showMACD={showMACD}
         onToggleRSI={() => setShowRSI((v) => !v)}
         onToggleMACD={() => setShowMACD((v) => !v)}
+        showAISignals={showAISignals}
+        onToggleAISignals={() => setShowAISignals((v) => !v)}
       />
 
       {/* Error */}
@@ -161,6 +249,7 @@ const MarketChart: React.FC = () => {
       <CandlestickChart
         candles={candles}
         overlays={overlays}
+        markers={markers}
         height={520}
         loading={loading}
       />
@@ -181,7 +270,7 @@ const MarketChart: React.FC = () => {
             No chart data available for {symbol} at {interval}
           </p>
           <button
-            onClick={refresh}
+            onClick={handleRefresh}
             className="mt-4 text-[#6366f1] hover:underline text-sm"
           >
             Try again

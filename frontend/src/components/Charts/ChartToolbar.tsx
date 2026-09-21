@@ -38,6 +38,9 @@ export interface ChartToolbarProps {
   showMACD: boolean;
   onToggleRSI: () => void;
   onToggleMACD: () => void;
+  // 🔥 NEW
+  showAISignals: boolean;
+  onToggleAISignals: () => void;
 }
 
 const OVERLAY_BUTTONS: {
@@ -63,6 +66,8 @@ export const ChartToolbar: React.FC<ChartToolbarProps> = ({
   showMACD,
   onToggleRSI,
   onToggleMACD,
+  showAISignals,
+  onToggleAISignals,
 }) => {
   return (
     <div className="bg-[#1a1a2e] border border-[#2a2a4a] rounded-xl p-4 space-y-4">
@@ -141,6 +146,14 @@ export const ChartToolbar: React.FC<ChartToolbarProps> = ({
             onClick={onToggleMACD}
             label="MACD"
             color="#fbbf24"
+          />
+
+          {/* 🔥 NEW: AI Signals toggle */}
+          <ToggleButton
+            active={showAISignals}
+            onClick={onToggleAISignals}
+            label="AI Signals"
+            color="#10b981"
           />
         </div>
       </div>
