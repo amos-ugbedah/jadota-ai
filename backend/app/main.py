@@ -116,6 +116,77 @@ def get_db():
         db.close()
 
 # ============================================
+# 🔐 ONE-TIME ADMIN BOOTSTRAP
+# Protected by ADMIN_BOOTSTRAP_KEY env var.
+# Call POST /api/v1/admin/bootstrap with {"key": "...", "email": "..."}.
+# Only promotes an EXISTING user. Safe to leave enabled (key is secret).
+# ============================================
+@app.post("/api/v1/admin/bootstrap")
+async def admin_bootstrap(request: dict, db: Session = Depends(get_db)):
+    """Promote an existing user to SUPER_ADMIN + ENTERPRISE."""
+    key = request.get("key")
+    email = request.get("email")
+
+    expected = os.getenv("ADMIN_BOOTSTRAP_KEY")
+    if not expected or key != expected:
+        raise HTTPException(status_code=401, detail="Invalid bootstrap key")
+
+    if not email:
+        raise HTTPException(status_code=400, detail="Email required")
+
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.role = "SUPER_ADMIN"
+    user.subscription_plan = "ENTERPRISE"
+    user.subscription_expires_at = datetime.utcnow() + timedelta(days=3650)
+    user.is_verified = True
+    db.commit()
+    db.refresh(user)
+
+    logger.info(f"🔐 Bootstrap: {user.email} promoted to SUPER_ADMIN / ENTERPRISE")
+
+    return {
+        "success": True,
+        "email": user.email,
+        "role": user.role,
+        "plan": user.subscription_plan,
+        "expires": user.subscription_expires_at.isoformat() if user.subscription_expires_at else None,
+    }
+
+
+# ============================================
+# 🔍 DB DIAGNOSTIC (for verifying Postgres vs SQLite)
+# ============================================
+@app.get("/api/v1/debug/db-info")
+async def db_info(db: Session = Depends(get_db)):
+    """Report which database engine is actually in use."""
+    try:
+        engine_name = db.bind.dialect.name if db.bind else "unknown"
+    except Exception:
+        engine_name = "unknown"
+
+    url = os.getenv("DATABASE_URL", "(unset)")
+    # Redact password in URL before returning
+    safe_url = url
+    if "@" in url and "://" in url:
+        scheme, rest = url.split("://", 1)
+        if "@" in rest:
+            creds, host = rest.split("@", 1)
+            if ":" in creds:
+                user_part = creds.split(":", 1)[0]
+                safe_url = f"{scheme}://{user_part}:***@{host}"
+            else:
+                safe_url = f"{scheme}://***@{host}"
+
+    return {
+        "engine": engine_name,
+        "database_url": safe_url,
+        "user_count": db.query(User).count(),
+    }
+
+# ============================================
 # 🔐 AUTH DEPENDENCY
 # ============================================
 async def get_current_user(
@@ -1107,6 +1178,7 @@ async def startup_event():
     logger.info(f"🔍 .env file: {env_path} (exists={env_path.exists()})")
     logger.info(f"🔍 TELEGRAM_BOT_TOKEN: {'✅ set' if bot_token else '❌ missing'}")
     logger.info(f"🔍 TELEGRAM_CHAT_ID:   {'✅ set' if chat_id else '❌ missing'}")
+    logger.info(f"🔍 ADMIN_BOOTSTRAP_KEY: {'✅ set' if os.getenv('ADMIN_BOOTSTRAP_KEY') else '❌ missing'}")
 
     if bot_token and chat_id:
         telegram_service.initialize(bot_token, chat_id)
