@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 env_path = Path(__file__).parent.parent / ".env"   # backend/.env
-load_dotenv(dotenv_path=env_path, override=True)
+load_dotenv(dotenv_path=env_path, override=False)
 
 # 🔥 FIX: Import Session from sqlalchemy.orm
 from sqlalchemy.orm import Session
