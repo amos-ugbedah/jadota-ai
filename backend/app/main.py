@@ -141,6 +141,7 @@ async def admin_bootstrap(request: dict, db: Session = Depends(get_db)):
     user.role = "SUPER_ADMIN"
     user.subscription_plan = "ENTERPRISE"
     user.subscription_expires_at = datetime.utcnow() + timedelta(days=3650)
+    user.is_subscription_active = True          # 🔥 ADDED: keep boolean consistent
     user.is_verified = True
     db.commit()
     db.refresh(user)
@@ -152,6 +153,7 @@ async def admin_bootstrap(request: dict, db: Session = Depends(get_db)):
         "email": user.email,
         "role": user.role,
         "plan": user.subscription_plan,
+        "is_active": user.has_active_subscription,   # 🔥 ADDED: verify property works
         "expires": user.subscription_expires_at.isoformat() if user.subscription_expires_at else None,
     }
 

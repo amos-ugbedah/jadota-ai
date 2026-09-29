@@ -91,8 +91,8 @@ const Subscription: React.FC = () => {
     }
 
     setIsLoading(true);
-    // In production, redirect to payment flow
-    toast.info(`💳 Redirecting to payment for ${plan.name} plan...`);
+    // 🔥 FIX: react-hot-toast has no .info() — use .success() instead
+    toast.success(`💳 Redirecting to payment for ${plan.name} plan...`);
     
     // Simulate payment flow
     setTimeout(() => {
