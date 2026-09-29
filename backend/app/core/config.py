@@ -1,245 +1,249 @@
 from typing import List, Optional, Union
-from pydantic_settings import BaseSettings
-from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 import os
 import secrets
 
+
 class Settings(BaseSettings):
+    """
+    Application settings.
+
+    pydantic-settings v2 automatically maps env vars to fields (case-insensitive):
+      - Field `database_url`  ←  env var `DATABASE_URL`
+      - Field `secret_key`    ←  env var `SECRET_KEY`
+      - Field `telegram_chat_id`  ←  env var `TELEGRAM_CHAT_ID`
+      - etc.
+
+    No aliases needed. Real env vars (Render) override .env file values.
+    """
+
     # ============================================
     # Application
     # ============================================
     app_name: str = "JADOTA AI"
-    app_env: str = Field(default="development", validation_alias="APP_ENV")
-    debug: bool = Field(default=True, validation_alias="DEBUG")
-    secret_key: str = Field(
-        default=secrets.token_urlsafe(32),
-        validation_alias="SECRET_KEY"
-    )
-    
+    app_env: str = "development"
+    debug: bool = True
+    secret_key: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
+
     # ============================================
     # API
     # ============================================
-    api_version: str = Field(default="v1", validation_alias="API_VERSION")
-    api_prefix: str = Field(default="/api/v1", validation_alias="API_PREFIX")
-    frontend_url: str = Field(default="http://localhost:3000", validation_alias="FRONTEND_URL")
-    
-    # 🔥 FIX: Use Union type to handle both string and list
-    cors_origins: Union[str, List[str]] = Field(
-        default="http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000",
-        validation_alias="CORS_ORIGINS"
+    api_version: str = "v1"
+    api_prefix: str = "/api/v1"
+    frontend_url: str = "http://localhost:3000"
+
+    cors_origins: Union[str, List[str]] = (
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:8000,http://127.0.0.1:8000"
     )
-    
-    allowed_hosts: Union[str, List[str]] = Field(
-        default="*",
-        validation_alias="ALLOWED_HOSTS"
-    )
-    
+
+    allowed_hosts: Union[str, List[str]] = "*"
+
     # ============================================
     # Database
     # ============================================
-    database_url: str = Field(
-        default="sqlite:///./jadota.db",
-        validation_alias="DATABASE_URL"
-    )
-    database_pool_size: int = Field(default=20, validation_alias="DATABASE_POOL_SIZE")
-    
+    database_url: str = "sqlite:///./jadota.db"
+    database_pool_size: int = 20
+
     # ============================================
-    # Firebase - All optional
+    # Telegram
     # ============================================
-    firebase_api_key: Optional[str] = Field(None, validation_alias="FIREBASE_API_KEY")
-    firebase_auth_domain: Optional[str] = Field(None, validation_alias="FIREBASE_AUTH_DOMAIN")
-    firebase_project_id: Optional[str] = Field(None, validation_alias="FIREBASE_PROJECT_ID")
-    firebase_storage_bucket: Optional[str] = Field(None, validation_alias="FIREBASE_STORAGE_BUCKET")
-    firebase_messaging_sender_id: Optional[str] = Field(None, validation_alias="FIREBASE_MESSAGING_SENDER_ID")
-    firebase_app_id: Optional[str] = Field(None, validation_alias="FIREBASE_APP_ID")
-    firebase_measurement_id: Optional[str] = Field(None, validation_alias="FIREBASE_MEASUREMENT_ID")
-    firebase_private_key_id: Optional[str] = Field(None, validation_alias="FIREBASE_PRIVATE_KEY_ID")
-    firebase_private_key: Optional[str] = Field(None, validation_alias="FIREBASE_PRIVATE_KEY")
-    firebase_client_email: Optional[str] = Field(None, validation_alias="FIREBASE_CLIENT_EMAIL")
-    firebase_client_id: Optional[str] = Field(None, validation_alias="FIREBASE_CLIENT_ID")
-    firebase_auth_uri: Optional[str] = Field(None, validation_alias="FIREBASE_AUTH_URI")
-    firebase_token_uri: Optional[str] = Field(None, validation_alias="FIREBASE_TOKEN_URI")
-    firebase_auth_provider_cert_url: Optional[str] = Field(None, validation_alias="FIREBASE_AUTH_PROVIDER_CERT_URL")
-    firebase_client_cert_url: Optional[str] = Field(None, validation_alias="FIREBASE_CLIENT_CERT_URL")
-    
+    telegram_bot_token: Optional[str] = None
+    telegram_chat_id: Optional[str] = None
+    telegram_group_chat_id: Optional[str] = None
+
+    # ============================================
+    # Admin bootstrap
+    # ============================================
+    admin_bootstrap_key: Optional[str] = None
+
+    # ============================================
+    # Firebase — All optional
+    # ============================================
+    firebase_api_key: Optional[str] = None
+    firebase_auth_domain: Optional[str] = None
+    firebase_project_id: Optional[str] = None
+    firebase_storage_bucket: Optional[str] = None
+    firebase_messaging_sender_id: Optional[str] = None
+    firebase_app_id: Optional[str] = None
+    firebase_measurement_id: Optional[str] = None
+    firebase_private_key_id: Optional[str] = None
+    firebase_private_key: Optional[str] = None
+    firebase_client_email: Optional[str] = None
+    firebase_client_id: Optional[str] = None
+    firebase_auth_uri: Optional[str] = None
+    firebase_token_uri: Optional[str] = None
+    firebase_auth_provider_cert_url: Optional[str] = None
+    firebase_client_cert_url: Optional[str] = None
+
     # ============================================
     # Redis
     # ============================================
-    redis_url: str = Field(default="redis://localhost:6379/0", validation_alias="REDIS_URL")
-    
+    redis_url: str = "redis://localhost:6379/0"
+
     # ============================================
     # JWT
     # ============================================
     jwt_algorithm: str = "HS256"
-    jwt_access_token_expire_minutes: int = Field(
-        default=60 * 24,  # 24 hours
-        validation_alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES"
-    )
-    jwt_refresh_token_expire_days: int = Field(
-        default=7,
-        validation_alias="JWT_REFRESH_TOKEN_EXPIRE_DAYS"
-    )
-    
+    jwt_access_token_expire_minutes: int = 60 * 24  # 24 hours
+    jwt_refresh_token_expire_days: int = 7
+
     # ============================================
     # Encryption
     # ============================================
-    encryption_key: str = Field(
-        default=secrets.token_urlsafe(32),
-        validation_alias="ENCRYPTION_KEY"
-    )
-    
+    encryption_key: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
+
     # ============================================
     # Bitget
     # ============================================
-    bitget_api_key: Optional[str] = Field(None, validation_alias="BITGET_API_KEY")
-    bitget_secret: Optional[str] = Field(None, validation_alias="BITGET_SECRET")
-    bitget_passphrase: Optional[str] = Field(None, validation_alias="BITGET_PASSPHRASE")
-    bitget_api_base: str = Field(default="https://api.bitget.com", validation_alias="BITGET_API_BASE")
-    bitget_ws_base: str = Field(default="wss://ws.bitget.com/v1/stream", validation_alias="BITGET_WS_BASE")
-    bitget_default_symbols: Union[str, List[str]] = Field(
-        default="BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT",
-        validation_alias="BITGET_DEFAULT_SYMBOLS"
+    bitget_api_key: Optional[str] = None
+    bitget_secret: Optional[str] = None
+    bitget_passphrase: Optional[str] = None
+    bitget_api_base: str = "https://api.bitget.com"
+    bitget_ws_base: str = "wss://ws.bitget.com/v1/stream"
+    bitget_default_symbols: Union[str, List[str]] = (
+        "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT"
     )
-    
+
     # ============================================
     # Payment
     # ============================================
-    jadota_wallet_address: Optional[str] = Field(
-        default="0x0000000000000000000000000000000000000000",
-        validation_alias="JADOTA_WALLET_ADDRESS"
+    jadota_wallet_address: Optional[str] = (
+        "0x0000000000000000000000000000000000000000"
     )
-    jadota_wallet_network: str = Field(default="BEP20", validation_alias="JADOTA_WALLET_NETWORK")
-    min_payment_confirmations: int = Field(default=6, validation_alias="MIN_PAYMENT_CONFIRMATIONS")
-    
+    jadota_wallet_network: str = "BEP20"
+    min_payment_confirmations: int = 6
+
     # ============================================
     # Risk Management
     # ============================================
-    default_max_risk_per_trade: float = Field(default=2.0, validation_alias="DEFAULT_MAX_RISK_PER_TRADE")
-    default_max_daily_loss: float = Field(default=5.0, validation_alias="DEFAULT_MAX_DAILY_LOSS")
-    default_max_weekly_loss: float = Field(default=10.0, validation_alias="DEFAULT_MAX_WEEKLY_LOSS")
-    max_allowed_drawdown: float = Field(default=15.0, validation_alias="MAX_ALLOWED_DRAWDOWN")
-    
+    default_max_risk_per_trade: float = 2.0
+    default_max_daily_loss: float = 5.0
+    default_max_weekly_loss: float = 10.0
+    max_allowed_drawdown: float = 15.0
+
     # ============================================
     # Performance Targets
     # ============================================
-    target_sharpe_ratio: float = Field(default=1.0, validation_alias="TARGET_SHARPE_RATIO")
-    min_profit_factor: float = Field(default=1.5, validation_alias="MIN_PROFIT_FACTOR")
-    min_win_rate: float = Field(default=55.0, validation_alias="MIN_WIN_RATE")
-    max_win_rate: float = Field(default=65.0, validation_alias="MAX_WIN_RATE")
-    
+    target_sharpe_ratio: float = 1.0
+    min_profit_factor: float = 1.5
+    min_win_rate: float = 55.0
+    max_win_rate: float = 65.0
+
     # ============================================
     # Trading
     # ============================================
-    max_position_days: int = Field(default=14, validation_alias="MAX_POSITION_DAYS")
-    min_trade_interval_seconds: int = Field(default=300, validation_alias="MIN_TRADE_INTERVAL_SECONDS")
-    max_order_retries: int = Field(default=3, validation_alias="MAX_ORDER_RETRIES")
-    
+    max_position_days: int = 14
+    min_trade_interval_seconds: int = 300
+    max_order_retries: int = 3
+
     # ============================================
     # Testing
     # ============================================
-    paper_trading_min_days: int = Field(default=90, validation_alias="PAPER_TRADING_MIN_DAYS")
-    min_simulated_trades: int = Field(default=100, validation_alias="MIN_SIMULATED_TRADES")
-    live_test_initial_amount: float = Field(default=100, validation_alias="LIVE_TEST_INITIAL_AMOUNT")
-    live_test_days: int = Field(default=30, validation_alias="LIVE_TEST_DAYS")
-    
+    paper_trading_min_days: int = 90
+    min_simulated_trades: int = 100
+    live_test_initial_amount: float = 100
+    live_test_days: int = 30
+
     # ============================================
     # Email
     # ============================================
-    smtp_enabled: bool = Field(default=False, validation_alias="SMTP_ENABLED")
-    smtp_host: Optional[str] = Field(None, validation_alias="SMTP_HOST")
-    smtp_port: Optional[int] = Field(None, validation_alias="SMTP_PORT")
-    smtp_username: Optional[str] = Field(None, validation_alias="SMTP_USERNAME")
-    smtp_password: Optional[str] = Field(None, validation_alias="SMTP_PASSWORD")
-    email_from: Optional[str] = Field(None, validation_alias="EMAIL_FROM")
-    
+    smtp_enabled: bool = False
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_username: Optional[str] = None
+    smtp_password: Optional[str] = None
+    email_from: Optional[str] = None
+
     # ============================================
     # Logging
     # ============================================
-    log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
-    
+    log_level: str = "INFO"
+
     # ============================================
     # Hugging Face / Render
     # ============================================
-    hf_space: bool = Field(default=False, validation_alias="HF_SPACE")
-    use_real_websocket: bool = Field(default=False, validation_alias="USE_REAL_WEBSOCKET")
-    
+    hf_space: bool = False
+    use_real_websocket: bool = False
+
     # ============================================
-    # 🔥 Helper Properties - Parse to lists
+    # Helper Properties — Parse to lists
     # ============================================
     @property
     def cors_origins_list(self) -> List[str]:
-        """Get CORS origins as a list"""
         if isinstance(self.cors_origins, str):
             if self.cors_origins == "*":
                 return ["*"]
-            return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
-        return self.cors_origins
-    
+            return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        return list(self.cors_origins)
+
     @property
     def allowed_hosts_list(self) -> List[str]:
-        """Get allowed hosts as a list"""
         if isinstance(self.allowed_hosts, str):
             if self.allowed_hosts == "*":
                 return ["*"]
-            return [host.strip() for host in self.allowed_hosts.split(",") if host.strip()]
-        return self.allowed_hosts
-    
+            return [h.strip() for h in self.allowed_hosts.split(",") if h.strip()]
+        return list(self.allowed_hosts)
+
     @property
     def bitget_default_symbols_list(self) -> List[str]:
-        """Get Bitget symbols as a list"""
         if isinstance(self.bitget_default_symbols, str):
             return [s.strip() for s in self.bitget_default_symbols.split(",") if s.strip()]
-        return self.bitget_default_symbols
+        return list(self.bitget_default_symbols)
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
-        extra = "ignore"
+    # ============================================
+    # pydantic-settings v2 config
+    # ============================================
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,   # ← DATABASE_URL matches database_url
+        extra="ignore",
+    )
+
 
 # ============================================
 # Create settings instance
 # ============================================
 settings = Settings()
 
+
 # ============================================
 # Helper Functions
 # ============================================
 def get_cors_origins() -> List[str]:
-    """Get CORS origins as a list"""
     return settings.cors_origins_list
 
+
 def get_allowed_hosts() -> List[str]:
-    """Get allowed hosts as a list"""
     return settings.allowed_hosts_list
 
+
 def get_bitget_symbols() -> List[str]:
-    """Get Bitget symbols as a list"""
     return settings.bitget_default_symbols_list
 
+
 def is_production() -> bool:
-    """Check if running in production"""
     return settings.app_env.lower() == "production"
 
+
 def is_development() -> bool:
-    """Check if running in development"""
     return settings.app_env.lower() == "development"
 
+
 def is_staging() -> bool:
-    """Check if running in staging"""
     return settings.app_env.lower() == "staging"
 
-# ============================================
-# Database URL Helper
-# ============================================
+
 def get_database_url() -> str:
-    """Get the database URL"""
     return settings.database_url
 
+
 def is_sqlite() -> bool:
-    """Check if using SQLite"""
     return "sqlite" in settings.database_url
 
+
 def is_postgres() -> bool:
-    """Check if using PostgreSQL"""
     return "postgresql" in settings.database_url
