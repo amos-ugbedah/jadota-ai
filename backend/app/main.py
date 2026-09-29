@@ -1,12 +1,14 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, status, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta
 import json
 import logging
 import uuid
 import httpx
 import os
+import traceback
 
 # 🔥 LOAD .env — must run BEFORE any code that reads env vars
 from dotenv import load_dotenv
@@ -77,6 +79,31 @@ app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=get_allowed_hosts(),
 )
+
+# ============================================
+# 🔥 Global Exception Handler
+# Ensures 500 errors come back WITH CORS headers so the browser
+# can show the real error (instead of masking it as a CORS block).
+# ============================================
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Catch-all for unhandled exceptions."""
+    logger.error(f"❌ Unhandled exception on {request.method} {request.url.path}")
+    logger.error(traceback.format_exc())
+
+    origin = request.headers.get("origin") or "*"
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": f"Internal server error: {type(exc).__name__}: {str(exc)}"
+        },
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+            "Access-Control-Allow-Headers": "*",
+        },
+    )
 
 # ============================================
 # Database Dependency
@@ -990,8 +1017,6 @@ async def test_telegram():
     """
     Test Telegram notification.
     """
-    import traceback
-
     message = """
 <b>🧪 JADOTA AI - Test Notification</b>
 ━━━━━━━━━━━━━━━━━━━━━━
