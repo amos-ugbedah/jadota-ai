@@ -16,6 +16,7 @@ import {
   BarChart2,
   Sliders,
   CandlestickChart,
+  LineChart,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { toast } from 'react-hot-toast';
@@ -25,13 +26,14 @@ const Sidebar: React.FC = () => {
   const { user, logout } = useAuthStore();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [adminExpanded, setAdminExpanded] = useState(true);
-  
+
   const isAdmin = user?.role === 'ADMIN' || user?.role === 'SUPER_ADMIN';
 
   const navItems = [
     { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/trading', icon: TrendingUp, label: 'Trading' },
     { to: '/market-chart', icon: CandlestickChart, label: 'Market Chart' },
+    { to: '/analytics', icon: LineChart, label: 'Analytics' },
     { to: '/ai-trading', icon: Brain, label: 'AI Signals' },
     { to: '/trading-dashboard', icon: BarChart2, label: 'Performance' },
     { to: '/ai-settings', icon: Sliders, label: 'AI Settings' },
@@ -76,7 +78,7 @@ const Sidebar: React.FC = () => {
         </div>
       </div>
 
-      {/* Navigation - Scrollable */}
+      {/* Navigation */}
       <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
         {navItems.map((item) => (
           <NavLink
@@ -129,16 +131,15 @@ const Sidebar: React.FC = () => {
         )}
       </nav>
 
-      {/* Bottom - Fixed at bottom */}
+      {/* Bottom */}
       <div className="border-t border-[#2a2a4a] p-3 flex-shrink-0">
-        {/* User Info */}
         <div className="px-3 py-2 mb-2">
           <p className="text-sm font-medium text-white truncate">{user?.fullName || 'User'}</p>
           <p className="text-xs text-gray-400 truncate">{user?.email || 'No email'}</p>
           <div className="mt-1">
             <span className={`text-xs px-2 py-0.5 rounded-full ${
-              user?.subscription?.isActive 
-                ? 'bg-green-500/20 text-green-400' 
+              user?.subscription?.isActive
+                ? 'bg-green-500/20 text-green-400'
                 : 'bg-yellow-500/20 text-yellow-400'
             }`}>
               {user?.subscription?.isActive ? '● Active' : 'Free Demo'}
@@ -146,7 +147,6 @@ const Sidebar: React.FC = () => {
           </div>
         </div>
 
-        {/* Logout */}
         <button
           onClick={handleLogout}
           className="flex items-center gap-3 px-3 py-2.5 w-full rounded-lg text-gray-400 hover:bg-red-500/20 hover:text-red-400 transition"
