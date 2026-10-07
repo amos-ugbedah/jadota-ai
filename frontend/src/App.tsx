@@ -17,6 +17,7 @@ import Subscription from './pages/Subscription';
 import Settings from './pages/Settings';
 import Backtesting from './pages/Backtesting';
 import MarketChart from './pages/MarketChart';
+import Analytics from './pages/Analytics';           // 🔥 NEW
 import Login from './pages/Login';
 import Register from './pages/Register';
 
@@ -34,9 +35,7 @@ function App() {
     checkAuth();
   }, []);
 
-  // 🔥 Show loading spinner while checking auth
   if (isLoading) {
-    // 🔥 Force loading to resolve after 3 seconds (fallback)
     setTimeout(() => {
       const state = useAuthStore.getState();
       if (state.isLoading) {
@@ -76,16 +75,17 @@ function App() {
         }}
       />
       <Routes>
-        {/* Public Routes - Redirect to dashboard if already authenticated */}
+        {/* Public Routes */}
         <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" /> : <Login />} />
         <Route path="/register" element={isAuthenticated ? <Navigate to="/dashboard" /> : <Register />} />
         
-        {/* Protected Routes - Redirect to login if not authenticated */}
+        {/* Protected Routes */}
         <Route path="/" element={!isAuthenticated ? <Navigate to="/login" /> : <AppLayout />}>
           <Route index element={<Navigate to="/dashboard" />} />
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="trading" element={<Trading />} />
           <Route path="market-chart" element={<MarketChart />} />
+          <Route path="analytics" element={<Analytics />} />       {/* 🔥 NEW */}
           <Route path="ai-trading" element={<AITrading />} />
           <Route path="trading-dashboard" element={<TradingDashboard />} />
           <Route path="ai-settings" element={<AISettingsPage />} />
@@ -101,7 +101,7 @@ function App() {
           <Route path="admin/system" element={<System />} />
         </Route>
         
-        {/* Catch all - redirect to dashboard */}
+        {/* Catch all */}
         <Route path="*" element={<Navigate to="/dashboard" />} />
       </Routes>
     </BrowserRouter>

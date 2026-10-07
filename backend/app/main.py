@@ -32,6 +32,9 @@ from .services.ai_trading_service import ai_trading_service
 from .services.position_monitor import position_monitor
 from .services.telegram_service import telegram_service
 from .api.v1 import ai_settings
+# 🔥 NEW: Analytics router + shared position store
+from .api.v1 import analytics
+from .services.position_store import positions as _demo_positions
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -82,8 +85,6 @@ app.add_middleware(
 
 # ============================================
 # 🔥 Global Exception Handler
-# Ensures 500 errors come back WITH CORS headers so the browser
-# can show the real error (instead of masking it as a CORS block).
 # ============================================
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
@@ -117,9 +118,6 @@ def get_db():
 
 # ============================================
 # 🔐 ONE-TIME ADMIN BOOTSTRAP
-# Protected by ADMIN_BOOTSTRAP_KEY env var.
-# Call POST /api/v1/admin/bootstrap with {"key": "...", "email": "..."}.
-# Only promotes an EXISTING user. Safe to leave enabled (key is secret).
 # ============================================
 @app.post("/api/v1/admin/bootstrap")
 async def admin_bootstrap(request: dict, db: Session = Depends(get_db)):
@@ -141,7 +139,7 @@ async def admin_bootstrap(request: dict, db: Session = Depends(get_db)):
     user.role = "SUPER_ADMIN"
     user.subscription_plan = "ENTERPRISE"
     user.subscription_expires_at = datetime.utcnow() + timedelta(days=3650)
-    user.is_subscription_active = True          # 🔥 ADDED: keep boolean consistent
+    user.is_subscription_active = True
     user.is_verified = True
     db.commit()
     db.refresh(user)
@@ -153,13 +151,13 @@ async def admin_bootstrap(request: dict, db: Session = Depends(get_db)):
         "email": user.email,
         "role": user.role,
         "plan": user.subscription_plan,
-        "is_active": user.has_active_subscription,   # 🔥 ADDED: verify property works
+        "is_active": user.has_active_subscription,
         "expires": user.subscription_expires_at.isoformat() if user.subscription_expires_at else None,
     }
 
 
 # ============================================
-# 🔍 DB DIAGNOSTIC (for verifying Postgres vs SQLite)
+# 🔍 DB DIAGNOSTIC
 # ============================================
 @app.get("/api/v1/debug/db-info")
 async def db_info(db: Session = Depends(get_db)):
@@ -170,7 +168,6 @@ async def db_info(db: Session = Depends(get_db)):
         engine_name = "unknown"
 
     url = os.getenv("DATABASE_URL", "(unset)")
-    # Redact password in URL before returning
     safe_url = url
     if "@" in url and "://" in url:
         scheme, rest = url.split("://", 1)
@@ -781,7 +778,6 @@ async def get_ohlcv(symbol: str, interval: str = "1h", limit: int = 100):
                 except (IndexError, ValueError, TypeError):
                     continue
 
-            # 🔥 Bitget returns newest-first; reverse to oldest-first
             candles.reverse()
             logger.info(f"✅ Returning {len(candles)} candles for {symbol} ({bitget_interval})")
             return candles
@@ -794,9 +790,8 @@ async def get_ohlcv(symbol: str, interval: str = "1h", limit: int = 100):
 # ============================================
 # DEMO TRADING ENDPOINTS
 # ============================================
-
-# Store positions in memory (for demo)
-_demo_positions = []
+# NOTE: `_demo_positions` is now imported from services.position_store
+# at the top of this file, so it's shared with the analytics module.
 
 @app.post("/api/v1/demo/positions")
 async def open_demo_position(request: dict):
@@ -925,9 +920,7 @@ async def ai_status():
 # ============================================
 
 async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = None):
-    """
-    🏆 HYBRID: Execute trade with user's base amount scaled by AI confidence
-    """
+    """🏆 HYBRID: Execute trade with user's base amount scaled by AI confidence"""
     from .models.ai_settings import AISettings
     
     base_amount = 25.0
@@ -1082,14 +1075,17 @@ async def get_performance():
 app.include_router(ai_settings.router, prefix=settings.api_prefix)
 
 # ============================================
+# 📊 ANALYTICS ROUTER (NEW)
+# ============================================
+app.include_router(analytics.router, prefix=settings.api_prefix)
+
+# ============================================
 # TELEGRAM TEST ENDPOINT
 # ============================================
 
 @app.post("/api/v1/telegram/test")
 async def test_telegram():
-    """
-    Test Telegram notification.
-    """
+    """Test Telegram notification."""
     message = """
 <b>🧪 JADOTA AI - Test Notification</b>
 ━━━━━━━━━━━━━━━━━━━━━━
@@ -1170,11 +1166,10 @@ async def startup_event():
     """Start market data service on startup"""
     logger.info("🚀 Starting JADOTA AI API...")
     
-    # 🔥 Initialize Telegram
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = (
         os.getenv("TELEGRAM_CHAT_ID")
-        or os.getenv("TELEGRAM_GROUP_CHAT_ID")   # fallback in case name differs
+        or os.getenv("TELEGRAM_GROUP_CHAT_ID")
     )
 
     logger.info(f"🔍 .env file: {env_path} (exists={env_path.exists()})")
