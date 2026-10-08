@@ -16,6 +16,9 @@ from ...schemas.ai_settings import (
     StrategyPreset
 )
 
+# 🔥 NEW: strategy registry
+from ...ai.strategies import list_strategies, get_strategy, strategy_names
+
 router = APIRouter(prefix="/ai-settings", tags=["AI Settings"])
 
 def _serialize_settings(settings: AISettings) -> dict:
@@ -160,6 +163,101 @@ async def get_strategy_presets():
         }
     ]
 
+
+# ============================================
+# 🔥 NEW: STRATEGIES — list & apply
+# ============================================
+@router.get("/strategies")
+async def get_available_strategies():
+    """
+    List all available AI trading strategies with their defaults.
+
+    Returns:
+        {
+            "strategies": [
+                {
+                    "name": "conservative",
+                    "label": "Conservative",
+                    "description": "...",
+                    "risk_level": "Low",
+                    "icon": "🛡️",
+                    "color": "#10b981",
+                    "timeframe": "4h",
+                    "defaults": {
+                        "confidence_threshold": 75,
+                        "stop_loss_percent": 1.5,
+                        "take_profit_percent": 3.0,
+                        "position_size_multiplier": 0.5,
+                        "max_positions": 3,
+                        "max_trades_per_day": 3,
+                        "risk_per_trade": 1.0,
+                        "trade_amount": 25.0,
+                    }
+                },
+                ...
+            ]
+        }
+    """
+    return {"strategies": list_strategies()}
+
+
+@router.post("/apply-strategy/{name}")
+async def apply_strategy(
+    name: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Apply a strategy's defaults to the user's AI settings.
+
+    Overrides:
+        - strategy_type
+        - confidence_threshold
+        - stop_loss_percent
+        - take_profit_percent
+        - position_size_multiplier
+        - max_positions
+        - max_trades_per_day
+        - risk_per_trade
+    """
+    if name.lower() not in strategy_names():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown strategy: {name}. Available: {', '.join(strategy_names())}",
+        )
+
+    strat = get_strategy(name)
+
+    settings = db.query(AISettings).filter(
+        AISettings.user_id == current_user.id
+    ).first()
+
+    if not settings:
+        settings = AISettings(user_id=current_user.id)
+        db.add(settings)
+        db.flush()  # ensure settings.id is assigned before further updates
+
+    defaults = strat.config
+    settings.strategy_type = strat.NAME
+    settings.confidence_threshold = defaults.get("confidence_threshold", 65)
+    settings.stop_loss_percent = defaults.get("stop_loss_percent", 2.0)
+    settings.take_profit_percent = defaults.get("take_profit_percent", 4.0)
+    settings.position_size_multiplier = defaults.get("position_size_multiplier", 1.0)
+    settings.max_positions = defaults.get("max_positions", 5)
+    settings.max_trades_per_day = defaults.get("max_trades_per_day", 10)
+    settings.risk_per_trade = defaults.get("risk_per_trade", 2.0)
+
+    db.commit()
+    db.refresh(settings)
+
+    return {
+        "success": True,
+        "message": f"Applied {strat.LABEL} strategy",
+        "strategy": strat.to_dict(),
+        "settings": _serialize_settings(settings),
+    }
+
+
 @router.get("/symbols")
 async def get_available_symbols():
     """Get all available trading symbols"""
@@ -179,7 +277,7 @@ async def apply_strategy_preset(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Apply a strategy preset to user's settings"""
+    """Apply a strategy preset to user's settings (legacy — kept for backward compatibility)"""
     settings = db.query(AISettings).filter(
         AISettings.user_id == current_user.id
     ).first()
