@@ -73,3 +73,8 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
+
+# Never commit .env backups
+backend/.env.backup*
+backend/.env.bak
+.env.backup*
