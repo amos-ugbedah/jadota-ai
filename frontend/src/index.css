@@ -53,3 +53,75 @@
     @apply text-gray-400 text-sm;
   }
 }
+
+/* ============================================
+   Mobile / PWA Enhancements
+   ============================================ */
+
+/* Prevent horizontal scroll on mobile */
+html, body {
+  overflow-x: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* iOS Safe Area Insets — used by bottom nav and header */
+.safe-area-top {
+  padding-top: env(safe-area-inset-top);
+}
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Better font rendering on mobile */
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior-y: none;
+}
+
+/* Minimum tap targets for accessibility */
+button, a {
+  min-height: 36px;
+}
+
+/* Prevent iOS text-size inflation */
+@media (max-width: 767px) {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+}
+
+/* Responsive table fallback — horizontal scroll on mobile */
+@media (max-width: 767px) {
+  table {
+    font-size: 13px;
+  }
+}
+
+/* Standalone PWA — remove extra top padding when installed to homescreen */
+@media (display-mode: standalone) {
+  body {
+    padding-top: 0;
+  }
+}
+
+/* Light scrollbar for desktop, hidden on mobile */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #2a2a4a;
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #3a3a5a;
+}
+@media (max-width: 767px) {
+  *::-webkit-scrollbar {
+    display: none;
+  }
+}

@@ -21,10 +21,14 @@ import {
 import { useAuthStore } from '@/store/authStore';
 import { toast } from 'react-hot-toast';
 
-const Sidebar: React.FC = () => {
+interface SidebarProps {
+  /** Optional callback fired when a nav link is clicked (used to close mobile drawer) */
+  onNavigate?: () => void;
+}
+
+const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
   const navigate = useNavigate();
   const { user, logout } = useAuthStore();
-  const [isCollapsed, setIsCollapsed] = useState(false);
   const [adminExpanded, setAdminExpanded] = useState(true);
 
   const isAdmin = user?.role === 'ADMIN' || user?.role === 'SUPER_ADMIN';
@@ -53,14 +57,19 @@ const Sidebar: React.FC = () => {
     try {
       await logout();
       toast.success('Logged out successfully');
+      onNavigate?.();
       navigate('/login');
     } catch (error) {
       toast.error('Failed to logout');
     }
   };
 
+  const handleNavClick = () => {
+    onNavigate?.();
+  };
+
   return (
-    <aside className="fixed left-0 top-0 h-screen w-64 bg-[#1a1a2e] border-r border-[#2a2a4a] z-40 flex flex-col">
+    <aside className="flex flex-col h-full w-full bg-[#1a1a2e]">
       {/* Logo */}
       <div className="p-4 border-b border-[#2a2a4a] flex-shrink-0">
         <div className="flex items-center gap-3">
@@ -84,6 +93,7 @@ const Sidebar: React.FC = () => {
           <NavLink
             key={item.to}
             to={item.to}
+            onClick={handleNavClick}
             className={({ isActive }) =>
               `flex items-center gap-3 px-3 py-2.5 rounded-lg transition ${
                 isActive
@@ -105,7 +115,11 @@ const Sidebar: React.FC = () => {
               className="flex items-center justify-between w-full px-3 py-2 text-xs tracking-wider text-gray-500 uppercase transition hover:text-gray-300"
             >
               <span>Admin</span>
-              {adminExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+              {adminExpanded ? (
+                <ChevronDown className="w-3 h-3" />
+              ) : (
+                <ChevronRight className="w-3 h-3" />
+              )}
             </button>
             {adminExpanded && (
               <div className="space-y-1">
@@ -113,6 +127,7 @@ const Sidebar: React.FC = () => {
                   <NavLink
                     key={item.to}
                     to={item.to}
+                    onClick={handleNavClick}
                     className={({ isActive }) =>
                       `flex items-center gap-3 px-3 py-2.5 rounded-lg transition ${
                         isActive
@@ -131,17 +146,21 @@ const Sidebar: React.FC = () => {
         )}
       </nav>
 
-      {/* Bottom */}
+      {/* Bottom — User + Logout */}
       <div className="border-t border-[#2a2a4a] p-3 flex-shrink-0">
         <div className="px-3 py-2 mb-2">
-          <p className="text-sm font-medium text-white truncate">{user?.fullName || 'User'}</p>
+          <p className="text-sm font-medium text-white truncate">
+            {user?.fullName || 'User'}
+          </p>
           <p className="text-xs text-gray-400 truncate">{user?.email || 'No email'}</p>
           <div className="mt-1">
-            <span className={`text-xs px-2 py-0.5 rounded-full ${
-              user?.subscription?.isActive
-                ? 'bg-green-500/20 text-green-400'
-                : 'bg-yellow-500/20 text-yellow-400'
-            }`}>
+            <span
+              className={`text-xs px-2 py-0.5 rounded-full ${
+                user?.subscription?.isActive
+                  ? 'bg-green-500/20 text-green-400'
+                  : 'bg-yellow-500/20 text-yellow-400'
+              }`}
+            >
               {user?.subscription?.isActive ? '● Active' : 'Free Demo'}
             </span>
           </div>

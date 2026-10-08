@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthStore } from '@/store/authStore';
 import { useNavigate, Link } from 'react-router-dom';
-import { 
-  Bell, User, Search, X, 
-  Settings, LogOut, HelpCircle, 
-  Crown, ChevronDown, CheckCircle, Loader2
+import {
+  Bell, User, Search, X,
+  Settings, LogOut, HelpCircle,
+  Crown, ChevronDown, CheckCircle, Loader2, Menu,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
@@ -16,7 +16,12 @@ interface Notification {
   type: 'trade' | 'price' | 'subscription' | 'system';
 }
 
-const Header: React.FC = () => {
+interface HeaderProps {
+  /** Fired when user taps the mobile hamburger button */
+  onMenuClick?: () => void;
+}
+
+const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
   const navigate = useNavigate();
   const { user, logout } = useAuthStore();
   const [searchQuery, setSearchQuery] = useState('');
@@ -62,7 +67,7 @@ const Header: React.FC = () => {
 
   const markAllRead = async () => {
     try {
-      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
       setUnreadCount(0);
       toast.success('All notifications marked as read');
     } catch (error) {
@@ -80,19 +85,47 @@ const Header: React.FC = () => {
   }, []);
 
   return (
-    <header className="fixed left-0 lg:left-64 right-0 top-0 h-16 bg-[#1a1a2e] border-b border-[#2a2a4a] z-30">
-      <div className="flex items-center justify-between h-full px-4 lg:px-6">
-        <div className="flex items-center flex-1 gap-3">
-          <form onSubmit={handleSearch} className="flex-1 max-w-md">
-            <div className="relative">
+    <header className="sticky top-0 z-30 bg-[#1a1a2e]/95 backdrop-blur-md border-b border-[#2a2a4a] safe-area-top">
+      <div className="flex items-center justify-between gap-2 px-3 h-14 lg:h-16 lg:px-6">
+        {/* ============================================ */}
+        {/* Left side: hamburger + search (or mobile logo) */}
+        {/* ============================================ */}
+        <div className="flex items-center flex-1 min-w-0 gap-2 lg:gap-3">
+          {/* Mobile hamburger */}
+          <button
+            onClick={onMenuClick}
+            aria-label="Open menu"
+            className="lg:hidden flex-shrink-0 p-2 rounded-lg text-gray-400 hover:text-white hover:bg-[#0a0a1a] transition"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+
+          {/* Mobile logo — only on phones/tablets */}
+          <Link
+            to="/dashboard"
+            className="flex items-center flex-shrink-0 gap-2 lg:hidden"
+          >
+            <img
+              src="/jadota-icon.png"
+              alt="JADOTA AI"
+              className="object-contain w-7 h-7"
+            />
+            <span className="text-base font-bold text-white whitespace-nowrap">
+              JADOTA <span className="text-[#6366f1]">AI</span>
+            </span>
+          </Link>
+
+          {/* Desktop search — hidden below md */}
+          <form onSubmit={handleSearch} className="flex-1 hidden max-w-md md:flex">
+            <div className="relative w-full">
               <Search className="absolute w-4 h-4 text-gray-400 -translate-y-1/2 left-3 top-1/2" />
               <input
                 type="text"
                 placeholder="Search markets..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-4 py-2 bg-[#0a0a1a] border border-[#2a2a4a] 
-                         rounded-lg text-white text-sm focus:outline-none focus:ring-2 
+                className="w-full pl-9 pr-4 py-2 bg-[#0a0a1a] border border-[#2a2a4a]
+                         rounded-lg text-white text-sm focus:outline-none focus:ring-2
                          focus:ring-[#6366f1] placeholder-gray-500"
               />
               {searchQuery && (
@@ -108,8 +141,11 @@ const Header: React.FC = () => {
           </form>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* Subscription Status */}
+        {/* ============================================ */}
+        {/* Right side: subscription, notifications, user */}
+        {/* ============================================ */}
+        <div className="flex items-center flex-shrink-0 gap-1 lg:gap-2">
+          {/* Subscription badge — hidden below sm */}
           <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-[#0a0a1a] rounded-lg border border-[#2a2a4a]">
             {user?.subscription?.isActive ? (
               <>
@@ -121,7 +157,10 @@ const Header: React.FC = () => {
             ) : (
               <>
                 <Crown className="w-3.5 h-3.5 text-yellow-400" />
-                <Link to="/subscription" className="text-xs font-medium text-yellow-400 hover:text-yellow-300">
+                <Link
+                  to="/subscription"
+                  className="text-xs font-medium text-yellow-400 hover:text-yellow-300"
+                >
                   Upgrade
                 </Link>
               </>
@@ -138,6 +177,7 @@ const Header: React.FC = () => {
                 if (!showNotifications) fetchNotifications();
               }}
               className="p-2 rounded-lg hover:bg-[#0a0a1a] transition relative"
+              aria-label="Notifications"
             >
               <Bell className="w-5 h-5 text-gray-400" />
               {unreadCount > 0 && (
@@ -148,7 +188,7 @@ const Header: React.FC = () => {
             </button>
 
             {showNotifications && (
-              <div className="absolute right-0 mt-2 w-80 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg shadow-xl overflow-hidden z-50">
+              <div className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-1rem)] bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg shadow-xl overflow-hidden z-50">
                 <div className="px-4 py-3 border-b border-[#2a2a4a] flex justify-between items-center">
                   <span className="text-sm font-medium text-white">Notifications</span>
                   {unreadCount > 0 && (
@@ -179,7 +219,11 @@ const Header: React.FC = () => {
                           !notif.read ? 'bg-[#6366f1]/5' : ''
                         }`}
                       >
-                        <p className={`text-sm ${!notif.read ? 'text-white' : 'text-gray-400'}`}>
+                        <p
+                          className={`text-sm ${
+                            !notif.read ? 'text-white' : 'text-gray-400'
+                          }`}
+                        >
                           {notif.message}
                         </p>
                         <p className="mt-1 text-xs text-gray-500">
@@ -198,7 +242,7 @@ const Header: React.FC = () => {
             )}
           </div>
 
-          {/* User Menu */}
+          {/* User menu */}
           <div className="relative">
             <button
               onClick={(e) => {
@@ -207,6 +251,7 @@ const Header: React.FC = () => {
                 setShowNotifications(false);
               }}
               className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-[#0a0a1a] transition"
+              aria-label="User menu"
             >
               <div className="w-8 h-8 rounded-full bg-[#6366f1]/20 flex items-center justify-center">
                 <User className="w-4 h-4 text-[#6366f1]" />
@@ -215,16 +260,22 @@ const Header: React.FC = () => {
             </button>
 
             {showUserMenu && (
-              <div className="absolute right-0 mt-2 w-56 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg shadow-xl overflow-hidden z-50">
+              <div className="absolute right-0 mt-2 w-56 max-w-[calc(100vw-1rem)] bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg shadow-xl overflow-hidden z-50">
                 <div className="px-4 py-3 border-b border-[#2a2a4a]">
-                  <p className="text-sm font-medium text-white">{user?.fullName || 'User'}</p>
-                  <p className="text-xs text-gray-400">{user?.email || 'No email'}</p>
+                  <p className="text-sm font-medium text-white truncate">
+                    {user?.fullName || 'User'}
+                  </p>
+                  <p className="text-xs text-gray-400 truncate">
+                    {user?.email || 'No email'}
+                  </p>
                   <div className="flex items-center gap-1 mt-1">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${
-                      user?.subscription?.isActive 
-                        ? 'bg-green-500/20 text-green-400' 
-                        : 'bg-yellow-500/20 text-yellow-400'
-                    }`}>
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded-full ${
+                        user?.subscription?.isActive
+                          ? 'bg-green-500/20 text-green-400'
+                          : 'bg-yellow-500/20 text-yellow-400'
+                      }`}
+                    >
                       {user?.subscription?.isActive ? '● Active' : 'Free Demo'}
                     </span>
                   </div>
