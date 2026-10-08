@@ -152,8 +152,11 @@ app.add_middleware(
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """Catch-all for unhandled exceptions."""
     logger.error(f"❌ Unhandled exception on {request.method} {request.url.path}")
-    logger.error(traceback.format_exc())
-
+    # 🔥 Use format_exception(exc) directly — format_exc() can return
+    #    "NoneType: None" inside async exception handlers.
+    logger.error(
+        "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    )
     origin = request.headers.get("origin") or "*"
     return JSONResponse(
         status_code=500,

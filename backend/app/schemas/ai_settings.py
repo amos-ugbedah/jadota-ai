@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
+
 # ============================================
 # STRATEGY INFO SCHEMA
 # ============================================
@@ -16,6 +17,7 @@ class StrategyInfo(BaseModel):
     icon: str
     risk_level: str
     settings: dict
+
 
 # ============================================
 # STRATEGY PRESET SCHEMA
@@ -28,16 +30,17 @@ class StrategyPreset(BaseModel):
     risk_level: str
     settings: dict
 
+
 # ============================================
 # AI SETTINGS BASE SCHEMA
 # ============================================
 class AISettingsBase(BaseModel):
     confidence_threshold: float = Field(70.0, ge=50, le=90)
     strategy_type: str = Field('balanced')
-    
+
     # 🔥 PER-TRADE AMOUNT
     trade_amount: float = Field(25.0, ge=1, le=10000)
-    
+
     stop_loss_percent: float = Field(2.0, ge=0.5, le=10)
     take_profit_percent: float = Field(4.0, ge=1, le=20)
     max_daily_loss: float = Field(5.0, ge=0.5, le=30)
@@ -49,8 +52,10 @@ class AISettingsBase(BaseModel):
     auto_trade_enabled: bool = False
     max_trades_per_day: int = Field(10, ge=1, le=50)
 
+
 class AISettingsCreate(AISettingsBase):
     pass
+
 
 class AISettingsUpdate(BaseModel):
     confidence_threshold: Optional[float] = Field(None, ge=50, le=90)
@@ -67,6 +72,7 @@ class AISettingsUpdate(BaseModel):
     auto_trade_enabled: Optional[bool] = None
     max_trades_per_day: Optional[int] = Field(None, ge=1, le=50)
 
+
 class AISettingsResponse(AISettingsBase):
     id: str
     user_id: str
@@ -76,8 +82,10 @@ class AISettingsResponse(AISettingsBase):
     total_pnl: float = 0.0
     best_trade: float = 0.0
     worst_trade: float = 0.0
-    created_at: datetime
-    updated_at: Optional[datetime]
-    
+    # 🔥 Both optional — serializer guarantees a value, but this makes
+    #    a NULL in the DB non-fatal rather than a 500.
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
     class Config:
         from_attributes = True
