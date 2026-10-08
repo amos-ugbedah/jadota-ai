@@ -7,7 +7,7 @@ import {
   Shield, Zap, Users, Star, ArrowRight
 } from 'lucide-react';
 import { paymentsApi, type Payment } from '@/api/payments';
-import PaymentModal from '@/components/subscription/PaymentModal';
+import PaymentModal from '@/components/Subscription/PaymentModal';
 
 interface Plan {
   id: string;
@@ -79,7 +79,8 @@ const Subscription: React.FC = () => {
   ]);
 
   useEffect(() => {
-    // Plans are static for now
+    // In production, fetch plans from API
+    // subscriptionApi.getPlans().then(setPlans);
   }, []);
 
   const handleSubscribe = async (plan: Plan) => {
@@ -95,6 +96,7 @@ const Subscription: React.FC = () => {
 
     try {
       setIsLoading(true);
+      // Create a pending payment — the modal opens immediately.
       const payment = await paymentsApi.create(plan.tier.toLowerCase(), 1);
       setActivePayment(payment);
     } catch (err: any) {

@@ -2,10 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { useAuthStore } from '@/store/authStore';
 import { toast } from 'react-hot-toast';
 import { Link } from 'react-router-dom';
-import { 
-  Crown, Check, Loader2, AlertCircle, 
+import {
+  Crown, Check, Loader2, AlertCircle,
   Shield, Zap, Users, Star, ArrowRight
 } from 'lucide-react';
+import { paymentsApi, type Payment } from '@/api/payments';
+import PaymentModal from '@/components/subscription/PaymentModal';
 
 interface Plan {
   id: string;
@@ -22,6 +24,8 @@ const Subscription: React.FC = () => {
   const { user } = useAuthStore();
   const [selectedPlan, setSelectedPlan] = useState<string>('pro');
   const [isLoading, setIsLoading] = useState(false);
+  const [activePayment, setActivePayment] = useState<Payment | null>(null);
+
   const [plans, setPlans] = useState<Plan[]>([
     {
       id: 'basic',
@@ -75,11 +79,10 @@ const Subscription: React.FC = () => {
   ]);
 
   useEffect(() => {
-    // In production, fetch plans from API
-    // subscriptionApi.getPlans().then(setPlans);
+    // Plans are static for now
   }, []);
 
-  const handleSubscribe = (plan: Plan) => {
+  const handleSubscribe = async (plan: Plan) => {
     if (plan.price === 0) {
       toast.success('✅ Basic plan activated! Free demo trading is now available.');
       return;
@@ -90,15 +93,15 @@ const Subscription: React.FC = () => {
       return;
     }
 
-    setIsLoading(true);
-    // 🔥 FIX: react-hot-toast has no .info() — use .success() instead
-    toast.success(`💳 Redirecting to payment for ${plan.name} plan...`);
-    
-    // Simulate payment flow
-    setTimeout(() => {
+    try {
+      setIsLoading(true);
+      const payment = await paymentsApi.create(plan.tier.toLowerCase(), 1);
+      setActivePayment(payment);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || 'Failed to create payment');
+    } finally {
       setIsLoading(false);
-      toast.success(`✅ ${plan.name} plan activated! You now have full access.`);
-    }, 2000);
+    }
   };
 
   return (
@@ -167,12 +170,12 @@ const Subscription: React.FC = () => {
           <div>
             <p className="font-medium text-yellow-400">Payment Information</p>
             <p className="mt-1 text-sm text-gray-400">
-              All payments are processed in USDT (ERC20). After payment confirmation, 
+              All payments are processed in USDT (BEP20). After payment confirmation,
               your subscription will be automatically activated. Demo trading is always free.
             </p>
             <div className="flex flex-wrap gap-3 mt-3">
               <span className="px-3 py-1 bg-[#0a0a1a] rounded-lg text-gray-400 text-sm border border-[#2a2a4a]">
-                💰 USDT (ERC20)
+                💰 USDT (BEP20)
               </span>
               <span className="px-3 py-1 bg-[#0a0a1a] rounded-lg text-gray-400 text-sm border border-[#2a2a4a]">
                 🔒 Secure Payment
@@ -189,24 +192,36 @@ const Subscription: React.FC = () => {
       <div className="bg-[#1a1a2e] rounded-xl p-6 border border-[#2a2a4a]">
         <h3 className="mb-4 text-lg font-semibold text-white">Frequently Asked Questions</h3>
         <div className="space-y-4">
-          <FAQItem 
-            question="What is the difference between demo and live trading?" 
+          <FAQItem
+            question="What is the difference between demo and live trading?"
             answer="Demo trading uses virtual funds and is completely free. Live trading uses your real exchange account with real money and requires a Pro or Enterprise subscription."
           />
-          <FAQItem 
-            question="How do I connect my Bitget account?" 
+          <FAQItem
+            question="How do I connect my Bitget account?"
             answer="Go to Settings > API Keys, enter your Bitget API credentials. Make sure to create an API key with READ + TRADE permissions only (NO WITHDRAW)."
           />
-          <FAQItem 
-            question="What happens if my subscription expires?" 
+          <FAQItem
+            question="What happens if my subscription expires?"
             answer="You will lose access to live trading features, but demo trading remains available. Your trading history and account data are preserved."
           />
-          <FAQItem 
-            question="Can I upgrade or downgrade my plan?" 
+          <FAQItem
+            question="Can I upgrade or downgrade my plan?"
             answer="Yes, you can change your plan at any time. Upgrades take effect immediately, downgrades will take effect at the end of your current billing period."
           />
         </div>
       </div>
+
+      {/* 🔥 Payment Modal */}
+      {activePayment && (
+        <PaymentModal
+          payment={activePayment}
+          onClose={() => setActivePayment(null)}
+          onSuccess={() => {
+            setActivePayment(null);
+            window.location.reload();
+          }}
+        />
+      )}
     </div>
   );
 };
@@ -218,7 +233,7 @@ const PlanCard: React.FC<{
   isLoading: boolean;
 }> = ({ plan, isCurrent, onSubscribe, isLoading }) => {
   const isFree = plan.price === 0;
-  
+
   return (
     <div className={`bg-[#1a1a2e] rounded-xl p-6 border relative ${
       plan.isPopular ? 'border-[#6366f1]' : 'border-[#2a2a4a]'
@@ -233,7 +248,7 @@ const PlanCard: React.FC<{
           Current Plan
         </span>
       )}
-      
+
       <div className="mb-4 text-center">
         <h3 className="text-xl font-bold text-white">{plan.name}</h3>
         <div className="mt-2">
@@ -305,7 +320,7 @@ const FAQItem: React.FC<{
   answer: string;
 }> = ({ question, answer }) => {
   const [isOpen, setIsOpen] = useState(false);
-  
+
   return (
     <div className="border-b border-[#2a2a4a] last:border-0 pb-4 last:pb-0">
       <button
