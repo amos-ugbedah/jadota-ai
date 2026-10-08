@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthStore } from '@/store/authStore';
 import { aiSettingsApi } from '@/api/aiSettings';
-import type { AISettings, StrategyPreset, PerformanceStats } from '@/api/aiSettings';
+import type {
+  AISettings,
+  StrategyInfo,
+  PerformanceStats,
+} from '@/api/aiSettings';
 import { toast } from 'react-hot-toast';
 import {
   Brain,
@@ -30,34 +34,38 @@ import {
   Clock,
 } from 'lucide-react';
 
+// ============================================
+// Page
+// ============================================
 const AISettingsPage: React.FC = () => {
   const { user } = useAuthStore();
   const [settings, setSettings] = useState<AISettings | null>(null);
-  const [presets, setPresets] = useState<StrategyPreset[]>([]);
+  const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
   const [availableSymbols, setAvailableSymbols] = useState<any[]>([]);
   const [performance, setPerformance] = useState<PerformanceStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isToggling, setIsToggling] = useState(false);
+  const [isApplyingStrategy, setIsApplyingStrategy] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'general' | 'risk' | 'symbols' | 'performance'>('general');
 
   const fetchAllData = async () => {
     try {
       setIsLoading(true);
-      
-      const [settingsData, presetsData, symbolsData, performanceData] = await Promise.all([
+
+      const [settingsData, strategiesData, symbolsData, performanceData] = await Promise.all([
         aiSettingsApi.getSettings(),
-        aiSettingsApi.getPresets(),
+        aiSettingsApi.getStrategies(),
         aiSettingsApi.getSymbols(),
         aiSettingsApi.getPerformance(),
       ]);
-      
+
       setSettings(settingsData);
-      setPresets(presetsData);
+      setStrategies(strategiesData.strategies);
       setAvailableSymbols(symbolsData);
       setPerformance(performanceData);
     } catch (error: any) {
-      toast.error(error.message || 'Failed to load settings');
+      toast.error(error?.message || 'Failed to load settings');
     } finally {
       setIsLoading(false);
     }
@@ -67,14 +75,17 @@ const AISettingsPage: React.FC = () => {
     fetchAllData();
   }, []);
 
+  // ============================================
+  // Actions
+  // ============================================
   const handleSave = async () => {
     if (!settings) return;
-    
+
     setIsSaving(true);
     try {
       const updated = await aiSettingsApi.updateSettings({
         confidence_threshold: settings.confidence_threshold,
-        trade_amount: settings.trade_amount,  // 🔥 ADD THIS
+        trade_amount: settings.trade_amount,
         stop_loss_percent: settings.stop_loss_percent,
         take_profit_percent: settings.take_profit_percent,
         position_size_multiplier: settings.position_size_multiplier,
@@ -89,37 +100,47 @@ const AISettingsPage: React.FC = () => {
       setSettings(updated);
       toast.success('Settings saved successfully! 🎉');
     } catch (error: any) {
-      toast.error(error.message || 'Failed to save settings');
+      toast.error(error?.message || 'Failed to save settings');
     } finally {
       setIsSaving(false);
     }
   };
 
-  const handleApplyPreset = async (presetType: string) => {
+  const handleApplyStrategy = async (name: string) => {
+    setIsApplyingStrategy(name);
     try {
-      const result = await aiSettingsApi.applyPreset(presetType);
+      const result = await aiSettingsApi.applyStrategy(name);
       setSettings(result.settings);
-      toast.success(`Applied ${presetType} strategy preset! 🚀`);
+      toast.success(`Applied ${result.strategy.label} strategy! 🚀`);
     } catch (error: any) {
-      toast.error(error.message || 'Failed to apply preset');
+      toast.error(
+        error?.response?.data?.detail ||
+          error?.message ||
+          'Failed to apply strategy'
+      );
+    } finally {
+      setIsApplyingStrategy(null);
     }
   };
 
   const handleToggleAutoTrade = async () => {
     if (!settings) return;
-    
+
     setIsToggling(true);
     try {
       const result = await aiSettingsApi.toggleAutoTrade(!settings.auto_trade_enabled);
       setSettings({ ...settings, auto_trade_enabled: result.auto_trade_enabled });
       toast.success(result.message);
     } catch (error: any) {
-      toast.error(error.message || 'Failed to toggle auto-trade');
+      toast.error(error?.message || 'Failed to toggle auto-trade');
     } finally {
       setIsToggling(false);
     }
   };
 
+  // ============================================
+  // Loading
+  // ============================================
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -137,23 +158,20 @@ const AISettingsPage: React.FC = () => {
     setSettings({ ...settings, [key]: value });
   };
 
-  const getStrategyColor = (type: string) => {
-    switch(type) {
-      case 'conservative': return 'text-green-400 bg-green-500/10 border-green-500/30';
-      case 'aggressive': return 'text-red-400 bg-red-500/10 border-red-500/30';
-      default: return 'text-blue-400 bg-blue-500/10 border-blue-500/30';
-    }
-  };
-
   const getRiskLevelColor = (level: string) => {
-    switch(level) {
-      case 'Low': return 'text-green-400';
-      case 'Medium': return 'text-yellow-400';
-      case 'High': return 'text-red-400';
-      default: return 'text-gray-400';
+    switch (level) {
+      case 'Low':
+        return 'text-green-400 bg-green-500/10 border-green-500/30';
+      case 'High':
+        return 'text-red-400 bg-red-500/10 border-red-500/30';
+      default:
+        return 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30';
     }
   };
 
+  // ============================================
+  // Render
+  // ============================================
   return (
     <div className="max-w-5xl p-6 mx-auto space-y-6">
       {/* Header */}
@@ -206,30 +224,95 @@ const AISettingsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Strategy Presets */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        {presets.map((preset) => (
-          <button
-            key={preset.type}
-            onClick={() => handleApplyPreset(preset.type)}
-            className={`p-4 rounded-xl border transition text-left ${
-              settings.strategy_type === preset.type
-                ? `${getStrategyColor(preset.type)} border-2`
-                : 'bg-[#1a1a2e] border-[#2a2a4a] hover:border-[#3a3a5a]'
-            }`}
-          >
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-lg font-semibold text-white">{preset.label}</span>
-              <span className={`text-xs font-medium ${getRiskLevelColor(preset.risk_level)}`}>
-                {preset.risk_level} Risk
-              </span>
-            </div>
-            <p className="text-sm text-gray-400">{preset.description}</p>
-            {settings.strategy_type === preset.type && (
-              <div className="mt-2 text-xs text-[#6366f1]">✓ Currently Active</div>
-            )}
-          </button>
-        ))}
+      {/* Strategy Presets — 5 cards */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold tracking-wider text-white uppercase">
+            Trading Strategies
+          </h2>
+          <span className="text-xs text-gray-500">
+            {strategies.length} available · click to apply defaults
+          </span>
+        </div>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {strategies.map((strat) => {
+            const isActive = settings.strategy_type === strat.name;
+            const isApplying = isApplyingStrategy === strat.name;
+
+            return (
+              <button
+                key={strat.name}
+                onClick={() => handleApplyStrategy(strat.name)}
+                disabled={isApplying}
+                className={`p-5 rounded-xl border-2 text-left transition relative ${
+                  isActive
+                    ? 'bg-[#6366f1]/10 border-[#6366f1] shadow-lg shadow-[#6366f1]/20'
+                    : 'bg-[#1a1a2e] border-[#2a2a4a] hover:border-[#3a3a5a]'
+                } ${isApplying ? 'opacity-60 cursor-wait' : ''}`}
+              >
+                {isActive && !isApplying && (
+                  <span className="absolute top-3 right-3 text-xs bg-[#6366f1] text-white px-2 py-1 rounded-full">
+                    ✓ Active
+                  </span>
+                )}
+                {isApplying && (
+                  <span className="absolute top-3 right-3">
+                    <Loader2 className="w-4 h-4 animate-spin text-[#6366f1]" />
+                  </span>
+                )}
+
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="text-3xl">{strat.icon}</span>
+                  <div>
+                    <div className="text-lg font-semibold text-white">{strat.label}</div>
+                    <span
+                      className={`text-xs font-medium px-2 py-0.5 rounded-full border ${getRiskLevelColor(
+                        strat.risk_level
+                      )}`}
+                    >
+                      {strat.risk_level} Risk
+                    </span>
+                  </div>
+                </div>
+
+                <p className="mb-3 text-sm leading-relaxed text-gray-400">
+                  {strat.description}
+                </p>
+
+                <div className="grid grid-cols-2 gap-2 text-xs pt-3 border-t border-[#2a2a4a]">
+                  <div>
+                    <span className="text-gray-500">Confidence:</span>{' '}
+                    <span className="font-medium text-white">
+                      {strat.defaults.confidence_threshold}%
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Timeframe:</span>{' '}
+                    <span className="font-medium text-white">{strat.timeframe}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">S/L:</span>{' '}
+                    <span className="font-medium text-red-400">
+                      {strat.defaults.stop_loss_percent}%
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">T/P:</span>{' '}
+                    <span className="font-medium text-green-400">
+                      {strat.defaults.take_profit_percent}%
+                    </span>
+                  </div>
+                  <div className="col-span-2">
+                    <span className="text-gray-500">Max trades/day:</span>{' '}
+                    <span className="font-medium text-white">
+                      {strat.defaults.max_trades_per_day}
+                    </span>
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Tabs */}
@@ -260,12 +343,14 @@ const AISettingsPage: React.FC = () => {
         />
       </div>
 
+      {/* ============================================ */}
       {/* General Tab */}
+      {/* ============================================ */}
       {activeTab === 'general' && (
         <div className="space-y-6">
           <div className="bg-[#1a1a2e] rounded-xl p-6 border border-[#2a2a4a]">
             <h3 className="mb-4 text-lg font-semibold text-white">📊 Strategy Settings</h3>
-            
+
             <div className="space-y-6">
               {/* Confidence Threshold */}
               <div>
@@ -283,7 +368,9 @@ const AISettingsPage: React.FC = () => {
                   max="90"
                   step="1"
                   value={settings.confidence_threshold}
-                  onChange={(e) => updateSetting('confidence_threshold', parseFloat(e.target.value))}
+                  onChange={(e) =>
+                    updateSetting('confidence_threshold', parseFloat(e.target.value))
+                  }
                   className="w-full h-2 bg-[#0a0a1a] rounded-lg appearance-none cursor-pointer accent-[#6366f1]"
                 />
                 <div className="flex justify-between mt-1 text-xs text-gray-500">
@@ -295,7 +382,7 @@ const AISettingsPage: React.FC = () => {
                 </p>
               </div>
 
-              {/* 🔥 Per-Trade Amount */}
+              {/* Per-Trade Amount */}
               <div className="pt-4 border-t border-[#2a2a4a]">
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-sm font-medium text-gray-400">
@@ -305,8 +392,7 @@ const AISettingsPage: React.FC = () => {
                     ${settings.trade_amount.toFixed(0)}
                   </span>
                 </div>
-                
-                {/* Quick amount buttons */}
+
                 <div className="flex flex-wrap gap-2 mb-3">
                   {[2, 5, 10, 25, 50, 100, 500, 1000].map((amount) => (
                     <button
@@ -323,8 +409,7 @@ const AISettingsPage: React.FC = () => {
                     </button>
                   ))}
                 </div>
-                
-                {/* Custom amount input */}
+
                 <div className="flex items-center gap-3">
                   <input
                     type="range"
@@ -332,7 +417,9 @@ const AISettingsPage: React.FC = () => {
                     max="1000"
                     step="1"
                     value={Math.min(settings.trade_amount, 1000)}
-                    onChange={(e) => updateSetting('trade_amount', parseFloat(e.target.value))}
+                    onChange={(e) =>
+                      updateSetting('trade_amount', parseFloat(e.target.value))
+                    }
                     className="flex-1 h-2 bg-[#0a0a1a] rounded-lg appearance-none cursor-pointer accent-[#6366f1]"
                   />
                   <div className="relative">
@@ -345,30 +432,39 @@ const AISettingsPage: React.FC = () => {
                       max="10000"
                       step="1"
                       value={settings.trade_amount}
-                      onChange={(e) => updateSetting('trade_amount', parseFloat(e.target.value) || 1)}
+                      onChange={(e) =>
+                        updateSetting('trade_amount', parseFloat(e.target.value) || 1)
+                      }
                       className="w-28 pl-7 pr-3 py-2 bg-[#0a0a1a] border border-[#2a2a4a] rounded-lg text-white text-center focus:outline-none focus:ring-2 focus:ring-[#6366f1]"
                     />
                   </div>
                 </div>
-                
-                {/* Hybrid scaling info */}
+
                 <div className="mt-3 p-3 bg-[#0a0a1a] rounded-lg border border-[#2a2a4a]">
                   <p className="mb-2 text-xs text-gray-400">
-                    <span className="font-medium text-white">🏆 Hybrid Scaling Active:</span>{' '}
+                    <span className="font-medium text-white">
+                      🏆 Hybrid Scaling Active:
+                    </span>{' '}
                     Amount auto-scales with AI confidence
                   </p>
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <div className="flex justify-between">
                       <span className="text-gray-500">85%+ conf:</span>
-                      <span className="text-green-400">100% = ${settings.trade_amount.toFixed(0)}</span>
+                      <span className="text-green-400">
+                        100% = ${settings.trade_amount.toFixed(0)}
+                      </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-500">75%+ conf:</span>
-                      <span className="text-blue-400">80% = ${(settings.trade_amount * 0.8).toFixed(0)}</span>
+                      <span className="text-blue-400">
+                        80% = ${(settings.trade_amount * 0.8).toFixed(0)}
+                      </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-500">65%+ conf:</span>
-                      <span className="text-yellow-400">60% = ${(settings.trade_amount * 0.6).toFixed(0)}</span>
+                      <span className="text-yellow-400">
+                        60% = ${(settings.trade_amount * 0.6).toFixed(0)}
+                      </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-500">Below 55%:</span>
@@ -378,7 +474,7 @@ const AISettingsPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Position Size */}
+              {/* Position Size Multiplier */}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-sm font-medium text-gray-400">
@@ -394,7 +490,12 @@ const AISettingsPage: React.FC = () => {
                   max="3"
                   step="0.1"
                   value={settings.position_size_multiplier}
-                  onChange={(e) => updateSetting('position_size_multiplier', parseFloat(e.target.value))}
+                  onChange={(e) =>
+                    updateSetting(
+                      'position_size_multiplier',
+                      parseFloat(e.target.value)
+                    )
+                  }
                   className="w-full h-2 bg-[#0a0a1a] rounded-lg appearance-none cursor-pointer accent-[#6366f1]"
                 />
                 <div className="flex justify-between mt-1 text-xs text-gray-500">
@@ -419,7 +520,9 @@ const AISettingsPage: React.FC = () => {
                   max="50"
                   step="1"
                   value={settings.max_trades_per_day}
-                  onChange={(e) => updateSetting('max_trades_per_day', parseInt(e.target.value))}
+                  onChange={(e) =>
+                    updateSetting('max_trades_per_day', parseInt(e.target.value))
+                  }
                   className="w-full h-2 bg-[#0a0a1a] rounded-lg appearance-none cursor-pointer accent-[#6366f1]"
                 />
                 <div className="flex justify-between mt-1 text-xs text-gray-500">
@@ -432,12 +535,14 @@ const AISettingsPage: React.FC = () => {
         </div>
       )}
 
+      {/* ============================================ */}
       {/* Risk Tab */}
+      {/* ============================================ */}
       {activeTab === 'risk' && (
         <div className="space-y-6">
           <div className="bg-[#1a1a2e] rounded-xl p-6 border border-[#2a2a4a]">
             <h3 className="mb-4 text-lg font-semibold text-white">🛡️ Risk Management</h3>
-            
+
             <div className="space-y-6">
               <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
                 {/* Stop Loss */}
@@ -454,7 +559,9 @@ const AISettingsPage: React.FC = () => {
                     max="10"
                     step="0.5"
                     value={settings.stop_loss_percent}
-                    onChange={(e) => updateSetting('stop_loss_percent', parseFloat(e.target.value))}
+                    onChange={(e) =>
+                      updateSetting('stop_loss_percent', parseFloat(e.target.value))
+                    }
                     className="w-full h-2 bg-[#0a0a1a] rounded-lg appearance-none cursor-pointer accent-red-500"
                   />
                   <div className="flex justify-between mt-1 text-xs text-gray-500">
@@ -477,7 +584,9 @@ const AISettingsPage: React.FC = () => {
                     max="20"
                     step="0.5"
                     value={settings.take_profit_percent}
-                    onChange={(e) => updateSetting('take_profit_percent', parseFloat(e.target.value))}
+                    onChange={(e) =>
+                      updateSetting('take_profit_percent', parseFloat(e.target.value))
+                    }
                     className="w-full h-2 bg-[#0a0a1a] rounded-lg appearance-none cursor-pointer accent-green-500"
                   />
                   <div className="flex justify-between mt-1 text-xs text-gray-500">
@@ -491,7 +600,9 @@ const AISettingsPage: React.FC = () => {
                 {/* Max Daily Loss */}
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-sm font-medium text-gray-400">Max Daily Loss</label>
+                    <label className="text-sm font-medium text-gray-400">
+                      Max Daily Loss
+                    </label>
                     <span className="text-lg font-bold text-yellow-400">
                       {settings.max_daily_loss}%
                     </span>
@@ -502,7 +613,9 @@ const AISettingsPage: React.FC = () => {
                     max="30"
                     step="0.5"
                     value={settings.max_daily_loss}
-                    onChange={(e) => updateSetting('max_daily_loss', parseFloat(e.target.value))}
+                    onChange={(e) =>
+                      updateSetting('max_daily_loss', parseFloat(e.target.value))
+                    }
                     className="w-full h-2 bg-[#0a0a1a] rounded-lg appearance-none cursor-pointer accent-yellow-500"
                   />
                 </div>
@@ -521,7 +634,9 @@ const AISettingsPage: React.FC = () => {
                     max="50"
                     step="1"
                     value={settings.max_drawdown}
-                    onChange={(e) => updateSetting('max_drawdown', parseFloat(e.target.value))}
+                    onChange={(e) =>
+                      updateSetting('max_drawdown', parseFloat(e.target.value))
+                    }
                     className="w-full h-2 bg-[#0a0a1a] rounded-lg appearance-none cursor-pointer accent-orange-500"
                   />
                 </div>
@@ -530,7 +645,9 @@ const AISettingsPage: React.FC = () => {
               {/* Max Positions */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-sm font-medium text-gray-400">Max Concurrent Positions</label>
+                  <label className="text-sm font-medium text-gray-400">
+                    Max Concurrent Positions
+                  </label>
                   <span className="text-lg font-bold text-[#6366f1]">
                     {settings.max_positions}
                   </span>
@@ -541,7 +658,9 @@ const AISettingsPage: React.FC = () => {
                   max="20"
                   step="1"
                   value={settings.max_positions}
-                  onChange={(e) => updateSetting('max_positions', parseInt(e.target.value))}
+                  onChange={(e) =>
+                    updateSetting('max_positions', parseInt(e.target.value))
+                  }
                   className="w-full h-2 bg-[#0a0a1a] rounded-lg appearance-none cursor-pointer accent-[#6366f1]"
                 />
                 <div className="flex justify-between mt-1 text-xs text-gray-500">
@@ -564,7 +683,9 @@ const AISettingsPage: React.FC = () => {
                   max="5"
                   step="0.5"
                   value={settings.risk_per_trade}
-                  onChange={(e) => updateSetting('risk_per_trade', parseFloat(e.target.value))}
+                  onChange={(e) =>
+                    updateSetting('risk_per_trade', parseFloat(e.target.value))
+                  }
                   className="w-full h-2 bg-[#0a0a1a] rounded-lg appearance-none cursor-pointer accent-purple-500"
                 />
                 <div className="flex justify-between mt-1 text-xs text-gray-500">
@@ -577,15 +698,19 @@ const AISettingsPage: React.FC = () => {
         </div>
       )}
 
+      {/* ============================================ */}
       {/* Symbols Tab */}
+      {/* ============================================ */}
       {activeTab === 'symbols' && (
         <div className="space-y-6">
           <div className="bg-[#1a1a2e] rounded-xl p-6 border border-[#2a2a4a]">
             <h3 className="mb-4 text-lg font-semibold text-white">🪙 Trading Symbols</h3>
-            
+
             <div className="space-y-3">
-              <p className="text-sm text-gray-400">Select which symbols the AI should trade</p>
-              
+              <p className="text-sm text-gray-400">
+                Select which symbols the AI should trade
+              </p>
+
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
                 {availableSymbols.map((item) => (
                   <button
@@ -593,7 +718,7 @@ const AISettingsPage: React.FC = () => {
                     onClick={() => {
                       const current = settings.symbols || [];
                       const newSymbols = current.includes(item.symbol)
-                        ? current.filter(s => s !== item.symbol)
+                        ? current.filter((s) => s !== item.symbol)
                         : [...current, item.symbol];
                       updateSetting('symbols', newSymbols);
                     }}
@@ -617,7 +742,8 @@ const AISettingsPage: React.FC = () => {
 
               <div className="mt-4 p-3 bg-[#0a0a1a] rounded-lg">
                 <p className="text-xs text-gray-500">
-                  <span className="font-medium">Selected:</span> {settings.symbols?.join(', ') || 'None'}
+                  <span className="font-medium">Selected:</span>{' '}
+                  {settings.symbols?.join(', ') || 'None'}
                 </p>
               </div>
             </div>
@@ -625,12 +751,14 @@ const AISettingsPage: React.FC = () => {
         </div>
       )}
 
+      {/* ============================================ */}
       {/* Performance Tab */}
+      {/* ============================================ */}
       {activeTab === 'performance' && (
         <div className="space-y-6">
           <div className="bg-[#1a1a2e] rounded-xl p-6 border border-[#2a2a4a]">
             <h3 className="mb-4 text-lg font-semibold text-white">📊 AI Performance</h3>
-            
+
             <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
               <PerformanceCard
                 label="Total Trades"
@@ -661,13 +789,17 @@ const AISettingsPage: React.FC = () => {
               <div className="bg-[#0a0a1a] rounded-lg p-4 border border-[#2a2a4a]">
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-400">Winning Trades</span>
-                  <span className="font-bold text-green-400">{performance?.winning_trades || 0}</span>
+                  <span className="font-bold text-green-400">
+                    {performance?.winning_trades || 0}
+                  </span>
                 </div>
               </div>
               <div className="bg-[#0a0a1a] rounded-lg p-4 border border-[#2a2a4a]">
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-400">Losing Trades</span>
-                  <span className="font-bold text-red-400">{performance?.losing_trades || 0}</span>
+                  <span className="font-bold text-red-400">
+                    {performance?.losing_trades || 0}
+                  </span>
                 </div>
               </div>
             </div>
@@ -678,6 +810,9 @@ const AISettingsPage: React.FC = () => {
   );
 };
 
+// ============================================
+// Sub-components
+// ============================================
 const TabButton: React.FC<{
   active: boolean;
   onClick: () => void;
@@ -706,11 +841,17 @@ const PerformanceCard: React.FC<{
   <div className="bg-[#0a0a1a] rounded-lg p-4 border border-[#2a2a4a]">
     <div className="flex items-center justify-between mb-1">
       <span className="text-xs text-gray-400">{label}</span>
-      <div className="p-1.5 bg-[#6366f1]/10 rounded-lg">
-        {icon}
-      </div>
+      <div className="p-1.5 bg-[#6366f1]/10 rounded-lg">{icon}</div>
     </div>
-    <p className={`text-xl font-bold ${positive !== undefined ? (positive ? 'text-green-400' : 'text-red-400') : 'text-white'}`}>
+    <p
+      className={`text-xl font-bold ${
+        positive !== undefined
+          ? positive
+            ? 'text-green-400'
+            : 'text-red-400'
+          : 'text-white'
+      }`}
+    >
       {value}
     </p>
   </div>
