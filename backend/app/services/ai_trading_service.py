@@ -3,6 +3,10 @@ AI Trading Engine - Intelligent trading decisions using multiple indicators.
 
 Signal generation is delegated to the active strategy
 (see app/ai/strategies/). Each strategy has its own scoring logic.
+
+Position-aware strategies (like DCA Recovery) additionally receive the
+user's currently OPEN position for the symbol being analyzed, so they can
+return "ADD" to signal that the engine should average down.
 """
 
 import logging
@@ -71,15 +75,28 @@ class AITradingService:
         timeframe: str = "1h",
         limit: int = 100,
         strategy: Optional[str] = None,
+        positions: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Analyze a symbol and generate a trading signal.
 
         Args:
-            strategy: name of the active strategy (conservative/balanced/aggressive/scalping/swing).
-                      Defaults to balanced.
+            strategy:  name of the active strategy
+                       (conservative/balanced/aggressive/scalping/swing/dca_recovery).
+                       Defaults to balanced.
+            positions: user's currently OPEN positions. Used by position-aware
+                       strategies (DCA Recovery). If provided, the matching
+                       position for `symbol` is passed as `position_context`.
         """
         strat = get_strategy(strategy)
+
+        # Find matching OPEN position for this symbol
+        position_context: Optional[Dict[str, Any]] = None
+        if positions:
+            for p in positions:
+                if p.get("symbol") == symbol and p.get("status") == "OPEN":
+                    position_context = p
+                    break
 
         try:
             ohlcv = await self._fetch_ohlcv(symbol, timeframe, limit)
@@ -93,7 +110,9 @@ class AITradingService:
 
             df = pd.DataFrame(ohlcv)
             indicators = await self._calculate_indicators(df)
-            signal = await self._generate_signal(symbol, df, indicators, strat)
+            signal = await self._generate_signal(
+                symbol, df, indicators, strat, position_context
+            )
 
             self.signals[symbol] = signal
             self.last_analysis[symbol] = datetime.utcnow()
@@ -273,19 +292,35 @@ class AITradingService:
     # Signal generation — delegates to the strategy
     # ============================================
     async def _generate_signal(
-        self, symbol: str, df: pd.DataFrame, indicators: Dict, strategy
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        indicators: Dict,
+        strategy,
+        position_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        signal, confidence = strategy.generate_signal(indicators)
+        """
+        Call the strategy's generate_signal.
+
+        🔥 Uses `strategy.call_generate_signal()` — a wrapper that passes
+        `position_context` only if the strategy accepts it. This keeps
+        existing 1-arg strategies (conservative, balanced, etc.) working
+        without modification while enabling position-aware strategies
+        (like DCA Recovery) to receive the extra context.
+        """
+        signal, confidence = strategy.call_generate_signal(indicators, position_context)
 
         sl_pct = strategy.config.get("stop_loss_percent", 2.0) / 100
         tp_pct = strategy.config.get("take_profit_percent", 4.0) / 100
         risk_reward = round(tp_pct / sl_pct, 2) if sl_pct > 0 else 1.0
 
-        reasoning = self._generate_reasoning(signal, indicators, confidence, strategy)
+        reasoning = self._generate_reasoning(
+            signal, indicators, confidence, strategy, position_context
+        )
 
         return {
             "symbol": symbol,
-            "signal": signal,
+            "signal": signal,       # BUY | SELL | HOLD | ADD
             "confidence": confidence,
             "reasoning": reasoning,
             "risk_reward": risk_reward,
@@ -295,9 +330,24 @@ class AITradingService:
             "timestamp": datetime.utcnow().isoformat(),
         }
 
-    def _generate_reasoning(self, signal, indicators, confidence, strategy):
+    def _generate_reasoning(
+        self,
+        signal,
+        indicators,
+        confidence,
+        strategy,
+        position_context: Optional[Dict[str, Any]] = None,
+    ):
         reasons = []
-        if signal == "BUY":
+
+        if signal == "ADD" and position_context:
+            entry = float(position_context.get("entryPrice") or 0)
+            if entry > 0:
+                drop_pct = ((indicators["close"] - entry) / entry) * 100
+                reasons.append(f"Position down {drop_pct:.2f}%")
+            reasons.append("Adding to average down")
+
+        elif signal == "BUY":
             if indicators["rsi"] < 30:
                 reasons.append("RSI oversold")
             if indicators["close"] <= indicators["bb_lower"] * 1.01:
@@ -306,7 +356,10 @@ class AITradingService:
                 reasons.append("MACD bullish")
             if indicators["close"] > indicators["sma_25"]:
                 reasons.append("Above SMA25")
+
         elif signal == "SELL":
+            if position_context and position_context.get("side") == "BUY":
+                reasons.append("Recovery — taking small profit")
             if indicators["rsi"] > 70:
                 reasons.append("RSI overbought")
             if indicators["close"] >= indicators["bb_upper"] * 0.99:
@@ -315,6 +368,7 @@ class AITradingService:
                 reasons.append("MACD bearish")
             if indicators["close"] < indicators["sma_25"]:
                 reasons.append("Below SMA25")
+
         else:
             return f"[{strategy.LABEL}] Mixed signals - waiting for clearer setup"
 

@@ -32,7 +32,7 @@ from .services.ai_trading_service import ai_trading_service
 from .services.position_monitor import position_monitor
 from .services.telegram_service import telegram_service
 from .api.v1 import ai_settings
-# 🔥 NEW: Analytics router + shared position store
+# 🔥 Analytics router + shared position store
 from .api.v1 import analytics
 from .services.position_store import positions as _demo_positions
 
@@ -790,7 +790,7 @@ async def get_ohlcv(symbol: str, interval: str = "1h", limit: int = 100):
 # ============================================
 # DEMO TRADING ENDPOINTS
 # ============================================
-# NOTE: `_demo_positions` is now imported from services.position_store
+# NOTE: `_demo_positions` is imported from services.position_store
 # at the top of this file, so it's shared with the analytics module.
 
 @app.post("/api/v1/demo/positions")
@@ -890,13 +890,13 @@ async def get_demo_balance():
 
 @app.get("/api/v1/ai/analyze/{symbol}")
 async def ai_analyze_symbol(symbol: str, timeframe: str = "1h"):
-    """Get AI trading signal for a symbol"""
+    """Get AI trading signal for a symbol (uses default strategy)"""
     result = await ai_trading_service.analyze_symbol(symbol, timeframe)
     return result
 
 @app.get("/api/v1/ai/analyze/all")
 async def ai_analyze_all():
-    """Get AI signals for all symbols"""
+    """Get AI signals for all symbols (uses default strategy)"""
     symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
     results = {}
     
@@ -920,35 +920,86 @@ async def ai_status():
 # ============================================
 
 async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = None):
-    """🏆 HYBRID: Execute trade with user's base amount scaled by AI confidence"""
+    """
+    Execute a trade based on AI signal.
+
+    Supported sides: BUY, SELL, ADD.
+      - BUY / SELL create a new position
+      - ADD merges into the user's existing OPEN position for that symbol
+        (average price, sum size) — used by the DCA Recovery strategy.
+    """
     from .models.ai_settings import AISettings
-    
+
     base_amount = 25.0
     stop_loss_pct = 0.02
     take_profit_pct = 0.04
-    
+
     if user_id:
         db = SessionLocal()
         try:
             user_settings = db.query(AISettings).filter(
                 AISettings.user_id == user_id
             ).first()
-            
             if user_settings:
                 base_amount = user_settings.trade_amount or 25.0
                 stop_loss_pct = (user_settings.stop_loss_percent or 2.0) / 100
                 take_profit_pct = (user_settings.take_profit_percent or 4.0) / 100
         finally:
             db.close()
-    
+
     current_price = market_data_service.get_price(symbol)
     if current_price == 0:
         current_price = 45000.00
-    
-    confidence = signal.get('confidence', 50)
+
+    confidence = signal.get("confidence", 50)
     trade_amount = ai_trading_service.calculate_trade_amount(base_amount, confidence)
     size = trade_amount / current_price
-    
+
+    # ============================================
+    # ADD — merge into existing OPEN position
+    # ============================================
+    if side == "ADD":
+        existing = None
+        for p in _demo_positions:
+            if (
+                p.get("user_id") == user_id
+                and p.get("symbol") == symbol
+                and p.get("status") == "OPEN"
+            ):
+                existing = p
+                break
+
+        if existing:
+            old_size = float(existing.get("size", 0))
+            old_price = float(existing.get("entryPrice", 0))
+            new_size = old_size + size
+            if new_size > 0:
+                avg_price = (old_size * old_price + size * current_price) / new_size
+            else:
+                avg_price = current_price
+
+            existing["size"] = round(new_size, 6)
+            existing["entryPrice"] = round(avg_price, 2)
+            existing["currentPrice"] = current_price
+            existing["tradeAmount"] = (existing.get("tradeAmount", 0) or 0) + trade_amount
+            existing["stopLoss"] = round(avg_price * (1 - stop_loss_pct), 2)
+            existing["takeProfit"] = round(avg_price * (1 + take_profit_pct), 2)
+
+            logger.info(
+                f"💰 DCA ADD: {symbol} | "
+                f"Old {old_size:.6f}@{old_price:.2f} + "
+                f"New {size:.6f}@{current_price:.2f} = "
+                f"Avg {new_size:.6f}@{avg_price:.2f}"
+            )
+            await telegram_service.send_trade_alert(existing, "ADD")
+            return existing
+
+        # No existing position — treat as BUY
+        side = "BUY"
+
+    # ============================================
+    # Normal BUY / SELL — create new position
+    # ============================================
     position = {
         "id": str(uuid.uuid4()),
         "symbol": symbol,
@@ -967,71 +1018,84 @@ async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = 
         "openedAt": datetime.utcnow().isoformat(),
         "status": "OPEN",
         "aiConfidence": confidence,
-        "aiReasoning": signal.get('reasoning', 'AI signal'),
-        "user_id": user_id
+        "aiReasoning": signal.get("reasoning", "AI signal"),
+        "user_id": user_id,
     }
-    
+
     _demo_positions.append(position)
     logger.info(
         f"🤖 AI Trade: {side} {symbol} | "
         f"Base ${base_amount} × {confidence}% = ${trade_amount} | "
         f"Size {size:.6f}"
     )
-    
+
     await telegram_service.send_trade_alert(position, "OPEN")
     return position
 
 @app.post("/api/v1/ai/auto-trade")
 async def auto_trade(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """Auto-trade based on user's AI settings"""
+    """Auto-trade based on user's AI settings and chosen strategy"""
     from .models.ai_settings import AISettings
-    
+
     settings = db.query(AISettings).filter(
         AISettings.user_id == current_user.id
     ).first()
-    
+
     if not settings:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Please configure your AI settings first"
+            detail="Please configure your AI settings first",
         )
-    
     if not settings.auto_trade_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Auto-trade is disabled. Enable it in AI Settings."
+            detail="Auto-trade is disabled. Enable it in AI Settings.",
         )
-    
+
     user_symbols = settings.get_symbols_list()
     confidence_threshold = settings.confidence_threshold
-    
+    strategy_name = getattr(settings, "strategy_type", None) or "balanced"
+
+    # 🔥 Build user's current OPEN positions once — passed to every analysis
+    user_positions = [
+        p for p in _demo_positions
+        if p.get("user_id") == current_user.id and p.get("status") == "OPEN"
+    ]
+
+    # Analyze each symbol with strategy + position context
+    signals = {}
+    for sym in ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]:
+        signals[sym] = await ai_trading_service.analyze_symbol(
+            sym,
+            timeframe="1h",
+            strategy=strategy_name,
+            positions=user_positions,
+        )
+
     results = []
-    signals = await ai_analyze_all()
-    
     for symbol, signal in signals.items():
         if symbol not in user_symbols:
             continue
-        if signal['confidence'] < confidence_threshold:
+        if signal["confidence"] < confidence_threshold:
             continue
-        
-        if signal['signal'] == 'BUY':
-            trade = await execute_ai_trade(symbol, 'BUY', signal, current_user.id)
+        sig = signal["signal"]
+
+        if sig in ("BUY", "SELL", "ADD"):
+            trade = await execute_ai_trade(symbol, sig, signal, current_user.id)
             results.append(trade)
-        elif signal['signal'] == 'SELL':
-            trade = await execute_ai_trade(symbol, 'SELL', signal, current_user.id)
-            results.append(trade)
-    
+
     return {
         "message": f"Executed {len(results)} trades",
+        "strategy": strategy_name,
         "trades": results,
         "settings_used": {
             "confidence_threshold": confidence_threshold,
             "trade_amount": settings.trade_amount,
-            "symbols": user_symbols
-        }
+            "symbols": user_symbols,
+        },
     }
 
 @app.get("/api/v1/ai/portfolio")
@@ -1075,7 +1139,7 @@ async def get_performance():
 app.include_router(ai_settings.router, prefix=settings.api_prefix)
 
 # ============================================
-# 📊 ANALYTICS ROUTER (NEW)
+# 📊 ANALYTICS ROUTER
 # ============================================
 app.include_router(analytics.router, prefix=settings.api_prefix)
 
