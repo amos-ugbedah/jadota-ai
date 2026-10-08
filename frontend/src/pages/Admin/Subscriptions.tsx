@@ -1,344 +1,435 @@
-import React, { useState, useEffect } from 'react';
-import { useAuthStore } from '@/store/authStore';
-import { toast } from 'react-hot-toast';
-import { Link } from 'react-router-dom';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
-  Crown, Check, Loader2, AlertCircle,
-  Shield, Zap, Users, Star, ArrowRight
+  Crown,
+  Users,
+  DollarSign,
+  TrendingUp,
+  RefreshCw,
+  Loader2,
+  Search,
+  CheckCircle,
+  XCircle,
+  Clock,
+  Award,
+  Mail,
 } from 'lucide-react';
-import { paymentsApi, type Payment } from '@/api/payments';
-import PaymentModal from '@/components/Subscription/PaymentModal';
+import { toast } from 'react-hot-toast';
+import apiClient from '@/api/client';
 
-interface Plan {
+// ============================================
+// Types
+// ============================================
+interface AdminUser {
   id: string;
-  name: string;
-  tier: 'BASIC' | 'PRO' | 'ENTERPRISE';
-  price: number;
-  currency: 'USDT';
-  duration: number;
-  features: string[];
-  isPopular?: boolean;
+  email: string;
+  fullName: string;
+  role: string;
+  subscription: {
+    plan: string | null;
+    isActive: boolean;
+    expiresAt?: string | null;
+  };
+  demoBalance: number;
+  createdAt: string;
 }
 
-const Subscription: React.FC = () => {
-  const { user } = useAuthStore();
-  const [selectedPlan, setSelectedPlan] = useState<string>('pro');
-  const [isLoading, setIsLoading] = useState(false);
-  const [activePayment, setActivePayment] = useState<Payment | null>(null);
+type PlanFilter = 'all' | 'BASIC' | 'PRO' | 'ENTERPRISE';
+type StatusFilter = 'all' | 'active' | 'inactive';
 
-  const [plans, setPlans] = useState<Plan[]>([
-    {
-      id: 'basic',
-      name: 'Basic',
-      tier: 'BASIC',
-      price: 0,
-      currency: 'USDT',
-      duration: 1,
-      features: [
-        '📊 Demo Trading',
-        '📈 Basic AI Signals',
-        '📋 Paper Trading',
-        '📱 Basic Dashboard'
-      ],
-      isPopular: false
-    },
-    {
-      id: 'pro',
-      name: 'Pro',
-      tier: 'PRO',
-      price: 29.99,
-      currency: 'USDT',
-      duration: 1,
-      features: [
-        '🔴 Live Trading',
-        '🧠 Advanced AI Engine',
-        '🛡️ Risk Management',
-        '⚡ Priority Support',
-        '📊 Real-time Analytics',
-        '🔔 Custom Alerts'
-      ],
-      isPopular: true
-    },
-    {
-      id: 'enterprise',
-      name: 'Enterprise',
-      tier: 'ENTERPRISE',
-      price: 99.99,
-      currency: 'USDT',
-      duration: 1,
-      features: [
-        '🏢 All Pro Features',
-        '🔄 Multiple Exchanges',
-        '🎯 Custom Strategies',
-        '👨‍💼 Dedicated Support',
-        '📈 Advanced Analytics',
-        '🔐 White-label Options'
-      ],
-      isPopular: false
-    }
-  ]);
+// Plan pricing (mirrors backend)
+const PLAN_PRICING: Record<string, number> = {
+  BASIC: 0,
+  PRO: 29.99,
+  ENTERPRISE: 99.99,
+};
 
-  useEffect(() => {
-    // In production, fetch plans from API
-    // subscriptionApi.getPlans().then(setPlans);
-  }, []);
+const PLAN_COLORS: Record<string, string> = {
+  BASIC: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
+  PRO: 'bg-[#6366f1]/20 text-[#a5b4fc] border-[#6366f1]/40',
+  ENTERPRISE: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+};
 
-  const handleSubscribe = async (plan: Plan) => {
-    if (plan.price === 0) {
-      toast.success('✅ Basic plan activated! Free demo trading is now available.');
-      return;
-    }
+// ============================================
+// Page
+// ============================================
+const AdminSubscriptions: React.FC = () => {
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [planFilter, setPlanFilter] = useState<PlanFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [search, setSearch] = useState('');
 
-    if (!user?.id) {
-      toast.error('Please login first');
-      return;
-    }
-
+  const load = async (silent = false) => {
+    if (!silent) setLoading(true);
+    else setRefreshing(true);
     try {
-      setIsLoading(true);
-      // Create a pending payment — the modal opens immediately.
-      const payment = await paymentsApi.create(plan.tier.toLowerCase(), 1);
-      setActivePayment(payment);
+      const data = await apiClient.get<AdminUser[]>('/admin/users');
+      setUsers(Array.isArray(data) ? data : []);
     } catch (err: any) {
-      toast.error(err?.response?.data?.detail || 'Failed to create payment');
+      toast.error(err?.response?.data?.detail || 'Failed to load subscriptions');
     } finally {
-      setIsLoading(false);
+      setLoading(false);
+      setRefreshing(false);
     }
   };
 
+  useEffect(() => {
+    load();
+  }, []);
+
+  // ============================================
+  // Derived stats (from ALL users, before filters)
+  // ============================================
+  const stats = useMemo(() => {
+    const totalUsers = users.length;
+
+    const activeSubs = users.filter((u) => u.subscription?.isActive);
+    const proCount = activeSubs.filter(
+      (u) => (u.subscription?.plan || '').toUpperCase() === 'PRO'
+    ).length;
+    const enterpriseCount = activeSubs.filter(
+      (u) => (u.subscription?.plan || '').toUpperCase() === 'ENTERPRISE'
+    ).length;
+
+    // Estimated monthly recurring revenue
+    let mrr = 0;
+    for (const u of activeSubs) {
+      const plan = (u.subscription?.plan || '').toUpperCase();
+      mrr += PLAN_PRICING[plan] || 0;
+    }
+
+    return {
+      totalUsers,
+      activeSubs: activeSubs.length,
+      proCount,
+      enterpriseCount,
+      mrr,
+    };
+  }, [users]);
+
+  // ============================================
+  // Filtered list
+  // ============================================
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+
+    return users
+      .filter((u) => {
+        // Plan filter (only count users WITH a subscription)
+        if (planFilter !== 'all') {
+          const plan = (u.subscription?.plan || '').toUpperCase();
+          if (plan !== planFilter) return false;
+        }
+
+        // Status filter
+        if (statusFilter === 'active' && !u.subscription?.isActive) return false;
+        if (statusFilter === 'inactive' && u.subscription?.isActive) return false;
+
+        // Search
+        if (q) {
+          const haystack = `${u.fullName} ${u.email}`.toLowerCase();
+          if (!haystack.includes(q)) return false;
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        // Active subs first, then by creation date (newest first)
+        if (a.subscription?.isActive !== b.subscription?.isActive) {
+          return a.subscription?.isActive ? -1 : 1;
+        }
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+  }, [users, planFilter, statusFilter, search]);
+
+  // ============================================
+  // Loading
+  // ============================================
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <Loader2 className="w-12 h-12 text-[#6366f1] animate-spin mx-auto" />
+          <p className="mt-4 text-gray-400">Loading subscriptions...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================
+  // Render
+  // ============================================
   return (
-    <div className="p-6 mx-auto space-y-8 max-w-7xl">
+    <div className="p-6 mx-auto space-y-6 max-w-7xl">
       {/* Header */}
-      <div className="text-center">
-        <div className="flex items-center justify-center gap-2 mb-2">
-          <Crown className="w-8 h-8 text-yellow-400" />
-          <h1 className="text-3xl font-bold text-white">Subscription Plans</h1>
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h1 className="flex items-center gap-3 text-3xl font-bold text-white">
+            <Crown className="w-8 h-8 text-yellow-400" />
+            Subscriptions
+          </h1>
+          <p className="mt-1 text-gray-400">
+            All user subscriptions, plans, and revenue
+          </p>
         </div>
-        <p className="max-w-2xl mx-auto text-gray-400">
-          Choose the plan that fits your trading needs. All plans include demo trading.
-        </p>
-        {user?.subscription?.isActive && (
-          <div className="inline-flex items-center gap-2 px-4 py-2 mt-2 text-sm text-green-400 border rounded-full bg-green-500/20 border-green-500/30">
-            <Check className="w-4 h-4" />
-            Current Plan: {user.subscription.plan || 'Active'}
-          </div>
-        )}
+
+        <button
+          onClick={() => load(true)}
+          disabled={refreshing}
+          className="flex items-center gap-2 px-4 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-gray-300 hover:text-white hover:border-[#3a3a5a] transition disabled:opacity-50 self-start"
+        >
+          <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
       </div>
 
-      {/* Plans Grid */}
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-        {plans.map((plan) => (
-          <PlanCard
-            key={plan.id}
-            plan={plan}
-            isCurrent={user?.subscription?.plan === plan.tier && user?.subscription?.isActive}
-            onSubscribe={() => handleSubscribe(plan)}
-            isLoading={isLoading}
-          />
-        ))}
-      </div>
-
-      {/* Features Comparison */}
-      <div className="bg-[#1a1a2e] rounded-xl p-6 border border-[#2a2a4a]">
-        <h3 className="mb-4 text-lg font-semibold text-center text-white">Compare Features</h3>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-[#2a2a4a]">
-                <th className="px-4 py-3 text-sm text-left text-gray-400">Feature</th>
-                <th className="px-4 py-3 text-sm text-center text-gray-400">Basic</th>
-                <th className="px-4 py-3 text-center text-[#6366f1] text-sm font-bold">Pro</th>
-                <th className="px-4 py-3 text-sm text-center text-gray-400">Enterprise</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#2a2a4a]">
-              <FeatureRow feature="Demo Trading" basic="✅" pro="✅" enterprise="✅" />
-              <FeatureRow feature="AI Signals" basic="📊 Basic" pro="🧠 Advanced" enterprise="🎯 Custom" />
-              <FeatureRow feature="Live Trading" basic="❌" pro="✅" enterprise="✅" />
-              <FeatureRow feature="Risk Management" basic="❌" pro="✅" enterprise="✅" />
-              <FeatureRow feature="Multiple Exchanges" basic="❌" pro="❌" enterprise="✅" />
-              <FeatureRow feature="Priority Support" basic="❌" pro="✅" enterprise="👨‍💼 Dedicated" />
-              <FeatureRow feature="Custom Strategies" basic="❌" pro="❌" enterprise="✅" />
-              <FeatureRow feature="Analytics" basic="📊 Basic" pro="📈 Advanced" enterprise="📊 Full" />
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Payment Info */}
-      <div className="p-6 border bg-yellow-500/10 border-yellow-500/30 rounded-xl">
-        <div className="flex items-start gap-3">
-          <AlertCircle className="w-5 h-5 text-yellow-400 flex-shrink-0 mt-0.5" />
-          <div>
-            <p className="font-medium text-yellow-400">Payment Information</p>
-            <p className="mt-1 text-sm text-gray-400">
-              All payments are processed in USDT (BEP20). After payment confirmation,
-              your subscription will be automatically activated. Demo trading is always free.
-            </p>
-            <div className="flex flex-wrap gap-3 mt-3">
-              <span className="px-3 py-1 bg-[#0a0a1a] rounded-lg text-gray-400 text-sm border border-[#2a2a4a]">
-                💰 USDT (BEP20)
-              </span>
-              <span className="px-3 py-1 bg-[#0a0a1a] rounded-lg text-gray-400 text-sm border border-[#2a2a4a]">
-                🔒 Secure Payment
-              </span>
-              <span className="px-3 py-1 bg-[#0a0a1a] rounded-lg text-gray-400 text-sm border border-[#2a2a4a]">
-                ⚡ Auto-activation
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* FAQ */}
-      <div className="bg-[#1a1a2e] rounded-xl p-6 border border-[#2a2a4a]">
-        <h3 className="mb-4 text-lg font-semibold text-white">Frequently Asked Questions</h3>
-        <div className="space-y-4">
-          <FAQItem
-            question="What is the difference between demo and live trading?"
-            answer="Demo trading uses virtual funds and is completely free. Live trading uses your real exchange account with real money and requires a Pro or Enterprise subscription."
-          />
-          <FAQItem
-            question="How do I connect my Bitget account?"
-            answer="Go to Settings > API Keys, enter your Bitget API credentials. Make sure to create an API key with READ + TRADE permissions only (NO WITHDRAW)."
-          />
-          <FAQItem
-            question="What happens if my subscription expires?"
-            answer="You will lose access to live trading features, but demo trading remains available. Your trading history and account data are preserved."
-          />
-          <FAQItem
-            question="Can I upgrade or downgrade my plan?"
-            answer="Yes, you can change your plan at any time. Upgrades take effect immediately, downgrades will take effect at the end of your current billing period."
-          />
-        </div>
-      </div>
-
-      {/* 🔥 Payment Modal */}
-      {activePayment && (
-        <PaymentModal
-          payment={activePayment}
-          onClose={() => setActivePayment(null)}
-          onSuccess={() => {
-            setActivePayment(null);
-            window.location.reload();
-          }}
+      {/* Stats */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+        <StatCard
+          label="Total Users"
+          value={stats.totalUsers}
+          icon={<Users className="w-5 h-5 text-blue-400" />}
         />
-      )}
-    </div>
-  );
-};
-
-const PlanCard: React.FC<{
-  plan: Plan;
-  isCurrent: boolean;
-  onSubscribe: () => void;
-  isLoading: boolean;
-}> = ({ plan, isCurrent, onSubscribe, isLoading }) => {
-  const isFree = plan.price === 0;
-
-  return (
-    <div className={`bg-[#1a1a2e] rounded-xl p-6 border relative ${
-      plan.isPopular ? 'border-[#6366f1]' : 'border-[#2a2a4a]'
-    } ${isCurrent ? 'border-green-500' : ''}`}>
-      {plan.isPopular && (
-        <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-[#6366f1] text-white text-xs px-3 py-1 rounded-full">
-          Most Popular
-        </span>
-      )}
-      {isCurrent && (
-        <span className="absolute px-3 py-1 text-xs text-white bg-green-500 rounded-full -top-3 right-4">
-          Current Plan
-        </span>
-      )}
-
-      <div className="mb-4 text-center">
-        <h3 className="text-xl font-bold text-white">{plan.name}</h3>
-        <div className="mt-2">
-          <span className="text-3xl font-bold text-[#6366f1]">
-            {isFree ? 'Free' : `$${plan.price}`}
-          </span>
-          {!isFree && <span className="text-sm text-gray-400">/month</span>}
-        </div>
-        <p className="mt-1 text-sm text-gray-400">
-          {isFree ? 'Forever free' : 'Billed monthly'}
-        </p>
+        <StatCard
+          label="Active Subs"
+          value={stats.activeSubs}
+          icon={<CheckCircle className="w-5 h-5 text-green-400" />}
+          tone="positive"
+        />
+        <StatCard
+          label="Pro"
+          value={stats.proCount}
+          icon={<Award className="w-5 h-5 text-[#6366f1]" />}
+        />
+        <StatCard
+          label="Enterprise"
+          value={stats.enterpriseCount}
+          icon={<Crown className="w-5 h-5 text-yellow-400" />}
+        />
+        <StatCard
+          label="Est. MRR"
+          value={`$${stats.mrr.toFixed(2)}`}
+          icon={<DollarSign className="w-5 h-5 text-green-400" />}
+          tone={stats.mrr > 0 ? 'positive' : 'neutral'}
+        />
       </div>
 
-      <ul className="mb-6 space-y-2">
-        {plan.features.map((feature, i) => (
-          <li key={i} className="flex items-start gap-2 text-sm text-gray-300">
-            <Check className="w-4 h-4 text-green-400 flex-shrink-0 mt-0.5" />
-            <span>{feature}</span>
-          </li>
-        ))}
-      </ul>
+      {/* Filters */}
+      <div className="bg-[#1a1a2e] border border-[#2a2a4a] rounded-xl p-4 space-y-3">
+        {/* Search */}
+        <div className="relative">
+          <Search className="absolute w-4 h-4 text-gray-500 -translate-y-1/2 left-3 top-1/2" />
+          <input
+            type="text"
+            placeholder="Search by name or email…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 bg-[#0a0a1a] border border-[#2a2a4a] rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#6366f1]"
+          />
+        </div>
 
-      <button
-        onClick={onSubscribe}
-        disabled={isLoading || isCurrent}
-        className={`w-full py-2.5 rounded-lg font-medium transition flex items-center justify-center gap-2 ${
-          isCurrent
-            ? 'bg-green-500/20 text-green-400 cursor-default'
-            : plan.isPopular
-              ? 'bg-[#6366f1] text-white hover:bg-[#4f46e5]'
-              : isFree
-                ? 'bg-[#2a2a4a] text-white hover:bg-[#3a3a5a]'
-                : 'bg-[#2a2a4a] text-gray-300 hover:bg-[#3a3a5a]'
-        }`}
-      >
-        {isLoading ? (
-          <Loader2 className="w-4 h-4 animate-spin" />
-        ) : isCurrent ? (
-          '✅ Active'
-        ) : isFree ? (
-          'Start Free'
+        {/* Plan filter */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="mr-1 text-xs tracking-wider text-gray-500 uppercase">
+            Plan
+          </span>
+          {(['all', 'BASIC', 'PRO', 'ENTERPRISE'] as const).map((p) => (
+            <button
+              key={p}
+              onClick={() => setPlanFilter(p)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition border ${
+                planFilter === p
+                  ? 'bg-[#6366f1] text-white border-[#6366f1]'
+                  : 'bg-[#0a0a1a] text-gray-400 hover:text-white border-[#2a2a4a]'
+              }`}
+            >
+              {p === 'all' ? 'All' : p}
+            </button>
+          ))}
+        </div>
+
+        {/* Status filter */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="mr-1 text-xs tracking-wider text-gray-500 uppercase">
+            Status
+          </span>
+          {(['all', 'active', 'inactive'] as const).map((s) => (
+            <button
+              key={s}
+              onClick={() => setStatusFilter(s)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition border ${
+                statusFilter === s
+                  ? 'bg-[#6366f1] text-white border-[#6366f1]'
+                  : 'bg-[#0a0a1a] text-gray-400 hover:text-white border-[#2a2a4a]'
+              }`}
+            >
+              {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="bg-[#1a1a2e] border border-[#2a2a4a] rounded-xl overflow-hidden">
+        {filtered.length === 0 ? (
+          <div className="py-16 text-center">
+            <Crown className="w-12 h-12 mx-auto mb-3 text-gray-600" />
+            <p className="text-gray-400">
+              {users.length === 0
+                ? 'No users yet'
+                : 'No subscriptions match your filters'}
+            </p>
+          </div>
         ) : (
-          <>
-            Subscribe
-            <ArrowRight className="w-4 h-4" />
-          </>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs text-gray-500 uppercase border-b border-[#2a2a4a] bg-[#0a0a1a]">
+                  <th className="px-4 py-3 text-left">User</th>
+                  <th className="px-4 py-3 text-left">Plan</th>
+                  <th className="px-4 py-3 text-left">Status</th>
+                  <th className="px-4 py-3 text-right">Monthly</th>
+                  <th className="px-4 py-3 text-left">Role</th>
+                  <th className="px-4 py-3 text-left">Created</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#2a2a4a]">
+                {filtered.map((u) => (
+                  <tr key={u.id} className="hover:bg-[#0a0a1a] transition">
+                    {/* User */}
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-full bg-[#6366f1]/20 flex items-center justify-center flex-shrink-0">
+                          <span className="text-xs font-semibold text-[#6366f1]">
+                            {(u.fullName || u.email || 'U')
+                              .charAt(0)
+                              .toUpperCase()}
+                          </span>
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-medium text-white truncate">
+                            {u.fullName || '—'}
+                          </p>
+                          <p className="flex items-center gap-1 text-xs text-gray-500 truncate">
+                            <Mail className="w-3 h-3" />
+                            {u.email}
+                          </p>
+                        </div>
+                      </div>
+                    </td>
+
+                    {/* Plan */}
+                    <td className="px-4 py-3">
+                      {u.subscription?.plan ? (
+                        <span
+                          className={`text-xs font-semibold px-2 py-1 rounded-full border ${
+                            PLAN_COLORS[
+                              (u.subscription.plan || '').toUpperCase()
+                            ] || PLAN_COLORS.BASIC
+                          }`}
+                        >
+                          {u.subscription.plan}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-600">—</span>
+                      )}
+                    </td>
+
+                    {/* Status */}
+                    <td className="px-4 py-3">
+                      {u.subscription?.isActive ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-green-400">
+                          <CheckCircle className="w-3.5 h-3.5" />
+                          Active
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-gray-500">
+                          <XCircle className="w-3.5 h-3.5" />
+                          Inactive
+                        </span>
+                      )}
+                    </td>
+
+                    {/* Monthly */}
+                    <td className="px-4 py-3 text-right">
+                      {u.subscription?.isActive ? (
+                        <span className="font-mono text-white">
+                          $
+                          {(
+                            PLAN_PRICING[
+                              (u.subscription.plan || '').toUpperCase()
+                            ] || 0
+                          ).toFixed(2)}
+                        </span>
+                      ) : (
+                        <span className="text-gray-600">—</span>
+                      )}
+                    </td>
+
+                    {/* Role */}
+                    <td className="px-4 py-3">
+                      <span
+                        className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                          u.role === 'SUPER_ADMIN'
+                            ? 'bg-purple-500/20 text-purple-400'
+                            : u.role === 'ADMIN'
+                            ? 'bg-blue-500/20 text-blue-400'
+                            : 'bg-gray-500/20 text-gray-400'
+                        }`}
+                      >
+                        {u.role}
+                      </span>
+                    </td>
+
+                    {/* Created */}
+                    <td className="px-4 py-3 text-xs text-gray-500">
+                      <span className="inline-flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {new Date(u.createdAt).toLocaleDateString()}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
-      </button>
+      </div>
+
+      {/* Footer info */}
+      <p className="text-xs text-center text-gray-600">
+        Showing {filtered.length} of {users.length} users
+        {stats.mrr > 0 && ` · Est. MRR $${stats.mrr.toFixed(2)}`}
+      </p>
     </div>
   );
 };
 
-const FeatureRow: React.FC<{
-  feature: string;
-  basic: string;
-  pro: string;
-  enterprise: string;
-}> = ({ feature, basic, pro, enterprise }) => (
-  <tr>
-    <td className="px-4 py-3 text-sm text-gray-300">{feature}</td>
-    <td className="px-4 py-3 text-sm text-center">{basic}</td>
-    <td className="px-4 py-3 text-center text-sm text-[#6366f1] font-medium">{pro}</td>
-    <td className="px-4 py-3 text-sm text-center">{enterprise}</td>
-  </tr>
+// ============================================
+// Sub-components
+// ============================================
+const StatCard: React.FC<{
+  label: string;
+  value: string | number;
+  icon: React.ReactNode;
+  tone?: 'positive' | 'neutral';
+}> = ({ label, value, icon, tone = 'neutral' }) => (
+  <div className="bg-[#1a1a2e] border border-[#2a2a4a] rounded-xl p-4">
+    <div className="flex items-center justify-between mb-2">
+      <span className="text-xs tracking-wider text-gray-400 uppercase">
+        {label}
+      </span>
+      <div className="p-1.5 bg-[#6366f1]/10 rounded-lg">{icon}</div>
+    </div>
+    <p
+      className={`text-xl font-bold ${
+        tone === 'positive' ? 'text-green-400' : 'text-white'
+      }`}
+    >
+      {value}
+    </p>
+  </div>
 );
 
-const FAQItem: React.FC<{
-  question: string;
-  answer: string;
-}> = ({ question, answer }) => {
-  const [isOpen, setIsOpen] = useState(false);
-
-  return (
-    <div className="border-b border-[#2a2a4a] last:border-0 pb-4 last:pb-0">
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center justify-between w-full text-left"
-      >
-        <span className="font-medium text-white">{question}</span>
-        <span className={`text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`}>
-          ▼
-        </span>
-      </button>
-      {isOpen && (
-        <p className="mt-2 text-sm text-gray-400">{answer}</p>
-      )}
-    </div>
-  );
-};
-
-export default Subscription;
+export default AdminSubscriptions;
