@@ -17,6 +17,7 @@ import {
   Sliders,
   CandlestickChart,
   LineChart,
+  CreditCard,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { toast } from 'react-hot-toast';
@@ -50,6 +51,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
     { to: '/admin', icon: Activity, label: 'Admin Dashboard' },
     { to: '/admin/users', icon: Users, label: 'Users' },
     { to: '/admin/subscriptions', icon: Crown, label: 'Subscriptions' },
+    { to: '/admin/payments', icon: CreditCard, label: 'Payments' },
     { to: '/admin/system', icon: Settings, label: 'System' },
   ];
 

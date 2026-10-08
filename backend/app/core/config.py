@@ -9,13 +9,8 @@ class Settings(BaseSettings):
     """
     Application settings.
 
-    pydantic-settings v2 automatically maps env vars to fields (case-insensitive):
-      - Field `database_url`  ←  env var `DATABASE_URL`
-      - Field `secret_key`    ←  env var `SECRET_KEY`
-      - Field `telegram_chat_id`  ←  env var `TELEGRAM_CHAT_ID`
-      - etc.
-
-    No aliases needed. Real env vars (Render) override .env file values.
+    pydantic-settings v2 automatically maps env vars to fields (case-insensitive).
+    Real env vars (Render) override .env file values.
     """
 
     # ============================================
@@ -110,11 +105,19 @@ class Settings(BaseSettings):
     # ============================================
     # Payment
     # ============================================
-    jadota_wallet_address: Optional[str] = (
-        "0x0000000000000000000000000000000000000000"
+    jadota_wallet_address: str = (
+        "0xa0ec55ce3f6916571695d5b8d8e507887a405782"
     )
     jadota_wallet_network: str = "BEP20"
     min_payment_confirmations: int = 6
+
+    # 🔥 Blockchain verification API keys — OPTIONAL
+    # Priority order for BEP20: NodeReal → BscScan → manual admin approval
+    # Priority order for ERC20: Etherscan → manual admin approval
+    # If missing, payments fall back to admin manual approval.
+    nodereal_api_key: Optional[str] = None     # https://dashboard.nodereal.io
+    bscscan_api_key: Optional[str] = None      # https://bscscan.com/myapikey (deprecated)
+    etherscan_api_key: Optional[str] = None    # https://etherscan.io/myapikey
 
     # ============================================
     # Risk Management
@@ -199,7 +202,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        case_sensitive=False,   # ← DATABASE_URL matches database_url
+        case_sensitive=False,
         extra="ignore",
     )
 

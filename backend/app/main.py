@@ -34,7 +34,9 @@ from .services.telegram_service import telegram_service
 from .api.v1 import ai_settings
 # 🔥 Analytics router + shared position store
 from .api.v1 import analytics
-from .services.position_store import positions as _demo_positions
+from .services.position_store import positions as _demo_positions 
+# 🔥 Payments router
+from .api.v1 import payments
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1142,6 +1144,11 @@ app.include_router(ai_settings.router, prefix=settings.api_prefix)
 # 📊 ANALYTICS ROUTER
 # ============================================
 app.include_router(analytics.router, prefix=settings.api_prefix)
+
+# ============================================
+# 💳 PAYMENTS ROUTER
+# ============================================
+app.include_router(payments.router, prefix=settings.api_prefix)
 
 # ============================================
 # TELEGRAM TEST ENDPOINT

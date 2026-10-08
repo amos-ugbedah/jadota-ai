@@ -1,326 +1,344 @@
 import React, { useState, useEffect } from 'react';
-import { adminApi } from '@/api/admin';
-import { subscriptionApi } from '@/api/subscription';
-import type { Subscription, Plan } from '@/api/subscription';
+import { useAuthStore } from '@/store/authStore';
 import { toast } from 'react-hot-toast';
-import { 
-  Crown, Users, DollarSign, Clock, Loader2,
-  CheckCircle, XCircle, RefreshCw, TrendingUp,
-  AlertCircle, Calendar, Eye, MoreVertical
+import { Link } from 'react-router-dom';
+import {
+  Crown, Check, Loader2, AlertCircle,
+  Shield, Zap, Users, Star, ArrowRight
 } from 'lucide-react';
-import { format, formatDistanceToNow } from 'date-fns';
+import { paymentsApi, type Payment } from '@/api/payments';
+import PaymentModal from '@/components/Subscription/PaymentModal';
 
-// ... rest of the component stays the same
+interface Plan {
+  id: string;
+  name: string;
+  tier: 'BASIC' | 'PRO' | 'ENTERPRISE';
+  price: number;
+  currency: 'USDT';
+  duration: number;
+  features: string[];
+  isPopular?: boolean;
+}
 
-const Subscriptions: React.FC = () => {
-  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
-  const [plans, setPlans] = useState<Plan[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [stats, setStats] = useState({
-    total: 0,
-    active: 0,
-    pending: 0,
-    expired: 0,
-    cancelled: 0,
-    revenue: 0
-  });
-  const [selectedSubscription, setSelectedSubscription] = useState<Subscription | null>(null);
+const Subscription: React.FC = () => {
+  const { user } = useAuthStore();
+  const [selectedPlan, setSelectedPlan] = useState<string>('pro');
+  const [isLoading, setIsLoading] = useState(false);
+  const [activePayment, setActivePayment] = useState<Payment | null>(null);
 
-  const fetchData = async () => {
+  const [plans, setPlans] = useState<Plan[]>([
+    {
+      id: 'basic',
+      name: 'Basic',
+      tier: 'BASIC',
+      price: 0,
+      currency: 'USDT',
+      duration: 1,
+      features: [
+        '📊 Demo Trading',
+        '📈 Basic AI Signals',
+        '📋 Paper Trading',
+        '📱 Basic Dashboard'
+      ],
+      isPopular: false
+    },
+    {
+      id: 'pro',
+      name: 'Pro',
+      tier: 'PRO',
+      price: 29.99,
+      currency: 'USDT',
+      duration: 1,
+      features: [
+        '🔴 Live Trading',
+        '🧠 Advanced AI Engine',
+        '🛡️ Risk Management',
+        '⚡ Priority Support',
+        '📊 Real-time Analytics',
+        '🔔 Custom Alerts'
+      ],
+      isPopular: true
+    },
+    {
+      id: 'enterprise',
+      name: 'Enterprise',
+      tier: 'ENTERPRISE',
+      price: 99.99,
+      currency: 'USDT',
+      duration: 1,
+      features: [
+        '🏢 All Pro Features',
+        '🔄 Multiple Exchanges',
+        '🎯 Custom Strategies',
+        '👨‍💼 Dedicated Support',
+        '📈 Advanced Analytics',
+        '🔐 White-label Options'
+      ],
+      isPopular: false
+    }
+  ]);
+
+  useEffect(() => {
+    // In production, fetch plans from API
+    // subscriptionApi.getPlans().then(setPlans);
+  }, []);
+
+  const handleSubscribe = async (plan: Plan) => {
+    if (plan.price === 0) {
+      toast.success('✅ Basic plan activated! Free demo trading is now available.');
+      return;
+    }
+
+    if (!user?.id) {
+      toast.error('Please login first');
+      return;
+    }
+
     try {
       setIsLoading(true);
-      
-      // Fetch all subscriptions
-      const subs = await adminApi.getSubscriptions({ limit: 100 });
-      setSubscriptions(subs);
-      
-      // Fetch plans
-      const plansData = await subscriptionApi.getPlans();
-      setPlans(plansData);
-      
-      // Calculate stats
-      const active = subs.filter(s => s.status === 'ACTIVE').length;
-      const pending = subs.filter(s => s.status === 'PENDING').length;
-      const expired = subs.filter(s => s.status === 'EXPIRED').length;
-      const cancelled = subs.filter(s => s.status === 'CANCELLED').length;
-      
-      // Calculate revenue (simplified)
-      const totalRevenue = subs
-        .filter(s => s.status === 'ACTIVE')
-        .reduce((sum, s) => sum + (s.plan?.price || 0), 0);
-      
-      setStats({
-        total: subs.length,
-        active,
-        pending,
-        expired,
-        cancelled,
-        revenue: totalRevenue
-      });
-      
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to fetch subscriptions');
+      // Create a pending payment — the modal opens immediately.
+      const payment = await paymentsApi.create(plan.tier.toLowerCase(), 1);
+      setActivePayment(payment);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || 'Failed to create payment');
     } finally {
       setIsLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const getStatusColor = (status: string) => {
-    switch(status) {
-      case 'ACTIVE': return 'text-green-400 bg-green-500/20';
-      case 'PENDING': return 'text-yellow-400 bg-yellow-500/20';
-      case 'EXPIRED': return 'text-red-400 bg-red-500/20';
-      case 'CANCELLED': return 'text-gray-400 bg-gray-500/20';
-      default: return 'text-gray-400 bg-gray-500/20';
-    }
-  };
-
-  const getStatusIcon = (status: string) => {
-    switch(status) {
-      case 'ACTIVE': return <CheckCircle className="w-3 h-3" />;
-      case 'PENDING': return <Clock className="w-3 h-3" />;
-      case 'EXPIRED': return <XCircle className="w-3 h-3" />;
-      case 'CANCELLED': return <XCircle className="w-3 h-3" />;
-      default: return null;
-    }
-  };
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <Loader2 className="w-12 h-12 text-[#6366f1] animate-spin mx-auto" />
-          <p className="mt-4 text-gray-400">Loading subscriptions...</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="p-6 mx-auto space-y-6 max-w-7xl">
+    <div className="p-6 mx-auto space-y-8 max-w-7xl">
       {/* Header */}
-      <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
-        <div>
-          <h1 className="text-3xl font-bold text-white">Subscriptions</h1>
-          <p className="mt-1 text-gray-400">Manage user subscriptions and plans</p>
+      <div className="text-center">
+        <div className="flex items-center justify-center gap-2 mb-2">
+          <Crown className="w-8 h-8 text-yellow-400" />
+          <h1 className="text-3xl font-bold text-white">Subscription Plans</h1>
         </div>
-        <button
-          onClick={fetchData}
-          className="flex items-center gap-2 px-4 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white hover:bg-[#2a2a4a] transition"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Refresh
-        </button>
+        <p className="max-w-2xl mx-auto text-gray-400">
+          Choose the plan that fits your trading needs. All plans include demo trading.
+        </p>
+        {user?.subscription?.isActive && (
+          <div className="inline-flex items-center gap-2 px-4 py-2 mt-2 text-sm text-green-400 border rounded-full bg-green-500/20 border-green-500/30">
+            <Check className="w-4 h-4" />
+            Current Plan: {user.subscription.plan || 'Active'}
+          </div>
+        )}
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <SubscriptionStatCard
-          title="Total"
-          value={stats.total.toString()}
-          icon={<Crown className="w-5 h-5 text-yellow-400" />}
-        />
-        <SubscriptionStatCard
-          title="Active"
-          value={stats.active.toString()}
-          icon={<Users className="w-5 h-5 text-green-400" />}
-        />
-        <SubscriptionStatCard
-          title="Pending"
-          value={stats.pending.toString()}
-          icon={<Clock className="w-5 h-5 text-yellow-400" />}
-        />
-        <SubscriptionStatCard
-          title="Expired"
-          value={stats.expired.toString()}
-          icon={<AlertCircle className="w-5 h-5 text-red-400" />}
-        />
-        <SubscriptionStatCard
-          title="Revenue"
-          value={`$${stats.revenue.toFixed(2)}`}
-          icon={<DollarSign className="w-5 h-5 text-blue-400" />}
-        />
+      {/* Plans Grid */}
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+        {plans.map((plan) => (
+          <PlanCard
+            key={plan.id}
+            plan={plan}
+            isCurrent={user?.subscription?.plan === plan.tier && user?.subscription?.isActive}
+            onSubscribe={() => handleSubscribe(plan)}
+            isLoading={isLoading}
+          />
+        ))}
       </div>
 
-      {/* Plans Section */}
+      {/* Features Comparison */}
       <div className="bg-[#1a1a2e] rounded-xl p-6 border border-[#2a2a4a]">
-        <h3 className="mb-4 text-lg font-semibold text-white">Available Plans</h3>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          {plans.map((plan) => (
-            <div key={plan.id} className="bg-[#0a0a1a] rounded-xl p-4 border border-[#2a2a4a]">
-              <div className="flex items-start justify-between">
-                <div>
-                  <h4 className="font-medium text-white">{plan.name}</h4>
-                  <p className="text-2xl font-bold text-[#6366f1]">
-                    ${plan.price}
-                    <span className="text-sm font-normal text-gray-400">/{plan.duration}mo</span>
-                  </p>
-                </div>
-                {plan.isPopular && (
-                  <span className="px-2 py-1 bg-[#6366f1] text-white text-xs rounded-full">
-                    Popular
-                  </span>
-                )}
-              </div>
-              <ul className="mt-3 space-y-1">
-                {plan.features.slice(0, 3).map((feature, i) => (
-                  <li key={i} className="flex items-center gap-1 text-xs text-gray-400">
-                    <CheckCircle className="w-3 h-3 text-green-400" />
-                    {feature}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Subscriptions Table */}
-      <div className="bg-[#1a1a2e] rounded-xl border border-[#2a2a4a] overflow-hidden">
+        <h3 className="mb-4 text-lg font-semibold text-center text-white">Compare Features</h3>
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr className="border-b border-[#2a2a4a] bg-[#0a0a1a]/50">
-                <th className="px-6 py-4 text-xs font-medium tracking-wider text-left text-gray-400 uppercase">User</th>
-                <th className="px-6 py-4 text-xs font-medium tracking-wider text-left text-gray-400 uppercase">Plan</th>
-                <th className="px-6 py-4 text-xs font-medium tracking-wider text-left text-gray-400 uppercase">Status</th>
-                <th className="px-6 py-4 text-xs font-medium tracking-wider text-left text-gray-400 uppercase">Started</th>
-                <th className="px-6 py-4 text-xs font-medium tracking-wider text-left text-gray-400 uppercase">Expires</th>
-                <th className="px-6 py-4 text-xs font-medium tracking-wider text-right text-gray-400 uppercase">Actions</th>
+              <tr className="border-b border-[#2a2a4a]">
+                <th className="px-4 py-3 text-sm text-left text-gray-400">Feature</th>
+                <th className="px-4 py-3 text-sm text-center text-gray-400">Basic</th>
+                <th className="px-4 py-3 text-center text-[#6366f1] text-sm font-bold">Pro</th>
+                <th className="px-4 py-3 text-sm text-center text-gray-400">Enterprise</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#2a2a4a]">
-              {subscriptions.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-6 py-8 text-center text-gray-400">
-                    No subscriptions found
-                  </td>
-                </tr>
-              ) : (
-                subscriptions.slice(0, 20).map((sub) => (
-                  <tr key={sub.id} className="hover:bg-[#0a0a1a]/50 transition">
-                    <td className="px-6 py-4 text-sm text-white">
-                      {sub.userId || 'Unknown User'}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-300">
-                      {sub.plan?.name || 'Unknown Plan'}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1 w-fit ${getStatusColor(sub.status)}`}>
-                        {getStatusIcon(sub.status)}
-                        {sub.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-400">
-                      {format(new Date(sub.startAt), 'MMM d, yyyy')}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-400">
-                      {sub.expiresAt ? (
-                        <span className={new Date(sub.expiresAt) < new Date() ? 'text-red-400' : ''}>
-                          {format(new Date(sub.expiresAt), 'MMM d, yyyy')}
-                          {new Date(sub.expiresAt) > new Date() && (
-                            <span className="block text-xs text-gray-500">
-                              {formatDistanceToNow(new Date(sub.expiresAt))} remaining
-                            </span>
-                          )}
-                        </span>
-                      ) : 'N/A'}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <button
-                        onClick={() => setSelectedSubscription(sub)}
-                        className="p-1 hover:bg-[#2a2a4a] rounded transition"
-                      >
-                        <Eye className="w-4 h-4 text-gray-400" />
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
+              <FeatureRow feature="Demo Trading" basic="✅" pro="✅" enterprise="✅" />
+              <FeatureRow feature="AI Signals" basic="📊 Basic" pro="🧠 Advanced" enterprise="🎯 Custom" />
+              <FeatureRow feature="Live Trading" basic="❌" pro="✅" enterprise="✅" />
+              <FeatureRow feature="Risk Management" basic="❌" pro="✅" enterprise="✅" />
+              <FeatureRow feature="Multiple Exchanges" basic="❌" pro="❌" enterprise="✅" />
+              <FeatureRow feature="Priority Support" basic="❌" pro="✅" enterprise="👨‍💼 Dedicated" />
+              <FeatureRow feature="Custom Strategies" basic="❌" pro="❌" enterprise="✅" />
+              <FeatureRow feature="Analytics" basic="📊 Basic" pro="📈 Advanced" enterprise="📊 Full" />
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Subscription Detail Modal */}
-      {selectedSubscription && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
-          <div className="bg-[#1a1a2e] rounded-xl border border-[#2a2a4a] max-w-md w-full p-6">
-            <div className="flex items-start justify-between mb-4">
-              <h3 className="text-xl font-bold text-white">Subscription Details</h3>
-              <button
-                onClick={() => setSelectedSubscription(null)}
-                className="text-gray-400 hover:text-white"
-              >
-                ✕
-              </button>
+      {/* Payment Info */}
+      <div className="p-6 border bg-yellow-500/10 border-yellow-500/30 rounded-xl">
+        <div className="flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-yellow-400 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium text-yellow-400">Payment Information</p>
+            <p className="mt-1 text-sm text-gray-400">
+              All payments are processed in USDT (BEP20). After payment confirmation,
+              your subscription will be automatically activated. Demo trading is always free.
+            </p>
+            <div className="flex flex-wrap gap-3 mt-3">
+              <span className="px-3 py-1 bg-[#0a0a1a] rounded-lg text-gray-400 text-sm border border-[#2a2a4a]">
+                💰 USDT (BEP20)
+              </span>
+              <span className="px-3 py-1 bg-[#0a0a1a] rounded-lg text-gray-400 text-sm border border-[#2a2a4a]">
+                🔒 Secure Payment
+              </span>
+              <span className="px-3 py-1 bg-[#0a0a1a] rounded-lg text-gray-400 text-sm border border-[#2a2a4a]">
+                ⚡ Auto-activation
+              </span>
             </div>
-            
-            <div className="space-y-3">
-              <div className="flex justify-between py-2 border-b border-[#2a2a4a]">
-                <span className="text-gray-400">Plan</span>
-                <span className="font-medium text-white">{selectedSubscription.plan?.name || 'N/A'}</span>
-              </div>
-              <div className="flex justify-between py-2 border-b border-[#2a2a4a]">
-                <span className="text-gray-400">Status</span>
-                <span className={`font-medium ${getStatusColor(selectedSubscription.status)}`}>
-                  {selectedSubscription.status}
-                </span>
-              </div>
-              <div className="flex justify-between py-2 border-b border-[#2a2a4a]">
-                <span className="text-gray-400">Started</span>
-                <span className="text-white">
-                  {format(new Date(selectedSubscription.startAt), 'MMM d, yyyy HH:mm')}
-                </span>
-              </div>
-              <div className="flex justify-between py-2 border-b border-[#2a2a4a]">
-                <span className="text-gray-400">Expires</span>
-                <span className="text-white">
-                  {selectedSubscription.expiresAt ? 
-                    format(new Date(selectedSubscription.expiresAt), 'MMM d, yyyy HH:mm') :
-                    'N/A'
-                  }
-                </span>
-              </div>
-              <div className="flex justify-between py-2">
-                <span className="text-gray-400">Trial</span>
-                <span className="text-white">{selectedSubscription.isTrial ? 'Yes' : 'No'}</span>
-              </div>
-            </div>
-
-            <button
-              onClick={() => setSelectedSubscription(null)}
-              className="mt-6 w-full py-2 bg-[#2a2a4a] text-gray-300 rounded-lg hover:bg-[#3a3a5a] transition"
-            >
-              Close
-            </button>
           </div>
         </div>
+      </div>
+
+      {/* FAQ */}
+      <div className="bg-[#1a1a2e] rounded-xl p-6 border border-[#2a2a4a]">
+        <h3 className="mb-4 text-lg font-semibold text-white">Frequently Asked Questions</h3>
+        <div className="space-y-4">
+          <FAQItem
+            question="What is the difference between demo and live trading?"
+            answer="Demo trading uses virtual funds and is completely free. Live trading uses your real exchange account with real money and requires a Pro or Enterprise subscription."
+          />
+          <FAQItem
+            question="How do I connect my Bitget account?"
+            answer="Go to Settings > API Keys, enter your Bitget API credentials. Make sure to create an API key with READ + TRADE permissions only (NO WITHDRAW)."
+          />
+          <FAQItem
+            question="What happens if my subscription expires?"
+            answer="You will lose access to live trading features, but demo trading remains available. Your trading history and account data are preserved."
+          />
+          <FAQItem
+            question="Can I upgrade or downgrade my plan?"
+            answer="Yes, you can change your plan at any time. Upgrades take effect immediately, downgrades will take effect at the end of your current billing period."
+          />
+        </div>
+      </div>
+
+      {/* 🔥 Payment Modal */}
+      {activePayment && (
+        <PaymentModal
+          payment={activePayment}
+          onClose={() => setActivePayment(null)}
+          onSuccess={() => {
+            setActivePayment(null);
+            window.location.reload();
+          }}
+        />
       )}
     </div>
   );
 };
 
-const SubscriptionStatCard: React.FC<{
-  title: string;
-  value: string;
-  icon: React.ReactNode;
-}> = ({ title, value, icon }) => (
-  <div className="bg-[#1a1a2e] rounded-xl p-6 border border-[#2a2a4a]">
-    <div className="flex items-start justify-between">
-      <div>
-        <p className="text-sm font-medium text-gray-400">{title}</p>
-        <p className="mt-1 text-2xl font-bold text-white">{value}</p>
+const PlanCard: React.FC<{
+  plan: Plan;
+  isCurrent: boolean;
+  onSubscribe: () => void;
+  isLoading: boolean;
+}> = ({ plan, isCurrent, onSubscribe, isLoading }) => {
+  const isFree = plan.price === 0;
+
+  return (
+    <div className={`bg-[#1a1a2e] rounded-xl p-6 border relative ${
+      plan.isPopular ? 'border-[#6366f1]' : 'border-[#2a2a4a]'
+    } ${isCurrent ? 'border-green-500' : ''}`}>
+      {plan.isPopular && (
+        <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-[#6366f1] text-white text-xs px-3 py-1 rounded-full">
+          Most Popular
+        </span>
+      )}
+      {isCurrent && (
+        <span className="absolute px-3 py-1 text-xs text-white bg-green-500 rounded-full -top-3 right-4">
+          Current Plan
+        </span>
+      )}
+
+      <div className="mb-4 text-center">
+        <h3 className="text-xl font-bold text-white">{plan.name}</h3>
+        <div className="mt-2">
+          <span className="text-3xl font-bold text-[#6366f1]">
+            {isFree ? 'Free' : `$${plan.price}`}
+          </span>
+          {!isFree && <span className="text-sm text-gray-400">/month</span>}
+        </div>
+        <p className="mt-1 text-sm text-gray-400">
+          {isFree ? 'Forever free' : 'Billed monthly'}
+        </p>
       </div>
-      <div className="p-2.5 bg-[#6366f1]/10 rounded-lg">
-        {icon}
-      </div>
+
+      <ul className="mb-6 space-y-2">
+        {plan.features.map((feature, i) => (
+          <li key={i} className="flex items-start gap-2 text-sm text-gray-300">
+            <Check className="w-4 h-4 text-green-400 flex-shrink-0 mt-0.5" />
+            <span>{feature}</span>
+          </li>
+        ))}
+      </ul>
+
+      <button
+        onClick={onSubscribe}
+        disabled={isLoading || isCurrent}
+        className={`w-full py-2.5 rounded-lg font-medium transition flex items-center justify-center gap-2 ${
+          isCurrent
+            ? 'bg-green-500/20 text-green-400 cursor-default'
+            : plan.isPopular
+              ? 'bg-[#6366f1] text-white hover:bg-[#4f46e5]'
+              : isFree
+                ? 'bg-[#2a2a4a] text-white hover:bg-[#3a3a5a]'
+                : 'bg-[#2a2a4a] text-gray-300 hover:bg-[#3a3a5a]'
+        }`}
+      >
+        {isLoading ? (
+          <Loader2 className="w-4 h-4 animate-spin" />
+        ) : isCurrent ? (
+          '✅ Active'
+        ) : isFree ? (
+          'Start Free'
+        ) : (
+          <>
+            Subscribe
+            <ArrowRight className="w-4 h-4" />
+          </>
+        )}
+      </button>
     </div>
-  </div>
+  );
+};
+
+const FeatureRow: React.FC<{
+  feature: string;
+  basic: string;
+  pro: string;
+  enterprise: string;
+}> = ({ feature, basic, pro, enterprise }) => (
+  <tr>
+    <td className="px-4 py-3 text-sm text-gray-300">{feature}</td>
+    <td className="px-4 py-3 text-sm text-center">{basic}</td>
+    <td className="px-4 py-3 text-center text-sm text-[#6366f1] font-medium">{pro}</td>
+    <td className="px-4 py-3 text-sm text-center">{enterprise}</td>
+  </tr>
 );
 
-export default Subscriptions;
+const FAQItem: React.FC<{
+  question: string;
+  answer: string;
+}> = ({ question, answer }) => {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <div className="border-b border-[#2a2a4a] last:border-0 pb-4 last:pb-0">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex items-center justify-between w-full text-left"
+      >
+        <span className="font-medium text-white">{question}</span>
+        <span className={`text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`}>
+          ▼
+        </span>
+      </button>
+      {isOpen && (
+        <p className="mt-2 text-sm text-gray-400">{answer}</p>
+      )}
+    </div>
+  );
+};
+
+export default Subscription;

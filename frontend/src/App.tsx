@@ -28,6 +28,7 @@ import Analytics from './pages/Analytics';
 import AdminDashboard from './pages/Admin/AdminDashboard';
 import Users from './pages/Admin/Users';
 import Subscriptions from './pages/Admin/Subscriptions';
+import AdminPayments from './pages/Admin/Payments';
 import System from './pages/Admin/System';
 
 function App() {
@@ -38,7 +39,6 @@ function App() {
     checkAuth();
   }, []);
 
-  // Loading spinner while checking auth
   if (isLoading) {
     setTimeout(() => {
       const state = useAuthStore.getState();
@@ -85,16 +85,11 @@ function App() {
         }}
       />
       <Routes>
-        {/* ============================================ */}
-        {/* Public routes                               */}
-        {/* ============================================ */}
-
-        {/* 🔥 Landing page — shows when NOT authenticated; redirects to dashboard when logged in */}
+        {/* Public routes */}
         <Route
           path="/"
           element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Landing />}
         />
-
         <Route
           path="/login"
           element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />}
@@ -104,9 +99,7 @@ function App() {
           element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Register />}
         />
 
-        {/* ============================================ */}
-        {/* Protected routes (require authentication)    */}
-        {/* ============================================ */}
+        {/* Protected routes */}
         <Route element={!isAuthenticated ? <Navigate to="/login" replace /> : <AppLayout />}>
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="trading" element={<Trading />} />
@@ -124,10 +117,11 @@ function App() {
           <Route path="admin" element={<AdminDashboard />} />
           <Route path="admin/users" element={<Users />} />
           <Route path="admin/subscriptions" element={<Subscriptions />} />
+          <Route path="admin/payments" element={<AdminPayments />} />
           <Route path="admin/system" element={<System />} />
         </Route>
 
-        {/* Catch-all — redirect unauthenticated to landing, authenticated to dashboard */}
+        {/* Catch-all */}
         <Route
           path="*"
           element={<Navigate to={isAuthenticated ? '/dashboard' : '/'} replace />}
