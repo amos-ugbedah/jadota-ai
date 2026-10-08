@@ -2,6 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================ */
+/* Base Layer                                    */
+/* ============================================ */
 @layer base {
   * {
     margin: 0;
@@ -9,12 +12,32 @@
     box-sizing: border-box;
   }
 
+  html {
+    /* 🔥 Prevent horizontal overflow WITHOUT creating a second scroll
+       container. This is the ONLY element that should have overflow-x set.
+       Setting it on body too would break mouse wheel scrolling. */
+    overflow-x: hidden;
+    /* Smooth scrolling for anchor links */
+    scroll-behavior: smooth;
+    /* Remove iOS tap highlight */
+    -webkit-tap-highlight-color: transparent;
+    /* Prevent iOS text inflation */
+    -webkit-text-size-adjust: 100%;
+  }
+
   body {
     background-color: #0a0a1a;
     color: #e0e0e0;
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    /* Better font rendering */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* NOTE: Do NOT set overflow-x/y here. `html` is the scroll container.
+       Body's overflow stays visible so wheel events reach the viewport. */
+    min-height: 100vh;
   }
 
+  /* Custom scrollbar — desktop only */
   ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
@@ -32,8 +55,24 @@
   ::-webkit-scrollbar-thumb:hover {
     background: #3a3a5a;
   }
+
+  /* Minimum tap targets for accessibility (mobile) */
+  button,
+  a {
+    min-height: 36px;
+  }
+
+  /* Responsive table fallback — smaller font on mobile */
+  @media (max-width: 767px) {
+    table {
+      font-size: 13px;
+    }
+  }
 }
 
+/* ============================================ */
+/* Component Layer                               */
+/* ============================================ */
 @layer components {
   .glass-effect {
     background: rgba(26, 26, 46, 0.8);
@@ -54,62 +93,30 @@
   }
 }
 
-/* ============================================
-   Mobile / PWA Enhancements
-   ============================================ */
-
-/* 🔥 FIX: Prevent horizontal scroll WITHOUT breaking mouse wheel scroll.
-   Setting `overflow-x: hidden` on BOTH html and body breaks wheel scrolling
-   in Chrome and Safari — the browser treats `html` as the scroll container
-   but can't route wheel events to it properly. Using `overflow-x: clip`
-   on body only avoids that pitfall. */
-html {
-  overflow-x: hidden;
-}
-body {
-  overflow-x: clip;
-  -webkit-tap-highlight-color: transparent;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  /* Allow wheel/trackpad to scroll the whole document naturally */
-  overscroll-behavior-y: auto;
-}
-
-/* iOS Safe Area Insets — used by bottom nav and header */
+/* ============================================ */
+/* Utilities — Safe Areas (iOS)                 */
+/* ============================================ */
 .safe-area-top {
   padding-top: env(safe-area-inset-top);
 }
+
 .safe-area-bottom {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
-/* Minimum tap targets for accessibility */
-button, a {
-  min-height: 36px;
-}
-
-/* Prevent iOS text-size inflation */
-@media (max-width: 767px) {
-  html {
-    -webkit-text-size-adjust: 100%;
-  }
-}
-
-/* Responsive table fallback — smaller font on mobile */
-@media (max-width: 767px) {
-  table {
-    font-size: 13px;
-  }
-}
-
-/* Standalone PWA — remove extra top padding when installed to homescreen */
+/* ============================================ */
+/* PWA — Standalone Mode                        */
+/* ============================================ */
 @media (display-mode: standalone) {
   body {
     padding-top: 0;
   }
 }
 
-/* Hide scrollbars on mobile only (touch scrolling doesn't need them) */
+/* ============================================ */
+/* Mobile — Hide scrollbars (touch scrolls       */
+/* without needing a visible scrollbar)          */
+/* ============================================ */
 @media (max-width: 767px) {
   *::-webkit-scrollbar {
     display: none;
