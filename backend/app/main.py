@@ -34,7 +34,7 @@ from .services.telegram_service import telegram_service
 from .api.v1 import ai_settings
 # 🔥 Analytics router + shared position store
 from .api.v1 import analytics
-from .services.position_store import positions as _demo_positions 
+from .services.position_store import positions as _demo_positions
 # 🔥 Payments router
 from .api.v1 import payments
 
@@ -49,6 +49,66 @@ try:
     logger.info("✅ Database tables created/verified")
 except Exception as e:
     logger.error(f"❌ Database setup error: {e}")
+
+
+# ============================================
+# 🔥 AUTO-MIGRATION — add missing columns to existing tables
+# Runs on every startup. Idempotent: skips columns that already exist.
+# Needed because Base.metadata.create_all() creates NEW tables but
+# does NOT add missing columns to tables that already exist.
+# ============================================
+def _run_startup_migrations():
+    from sqlalchemy import text as _sql_text, inspect as _inspect
+
+    # Expected columns for ai_settings
+    expected_ai_settings = {
+        "trade_amount": "FLOAT DEFAULT 25.0",
+        "stop_loss_percent": "FLOAT DEFAULT 2.0",
+        "take_profit_percent": "FLOAT DEFAULT 4.0",
+        "position_size_multiplier": "FLOAT DEFAULT 1.0",
+        "max_positions": "INTEGER DEFAULT 5",
+        "max_trades_per_day": "INTEGER DEFAULT 10",
+        "risk_per_trade": "FLOAT DEFAULT 2.0",
+        "max_daily_loss": "FLOAT DEFAULT 5.0",
+        "max_drawdown": "FLOAT DEFAULT 15.0",
+        "strategy_type": "VARCHAR(50)",
+        "auto_trade_enabled": "BOOLEAN DEFAULT FALSE",
+        "symbols": "TEXT",
+        "total_trades": "INTEGER DEFAULT 0",
+        "winning_trades": "INTEGER DEFAULT 0",
+        "losing_trades": "INTEGER DEFAULT 0",
+        "total_pnl": "FLOAT DEFAULT 0.0",
+        "best_trade": "FLOAT DEFAULT 0.0",
+        "worst_trade": "FLOAT DEFAULT 0.0",
+    }
+
+    try:
+        inspector = _inspect(engine)
+        tables = set(inspector.get_table_names())
+
+        with engine.connect() as conn:
+            # ---------- ai_settings ----------
+            if "ai_settings" in tables:
+                actual = {c["name"] for c in inspector.get_columns("ai_settings")}
+                missing = {k: v for k, v in expected_ai_settings.items() if k not in actual}
+                if missing:
+                    logger.info(f"🔧 ai_settings: adding {len(missing)} missing column(s)")
+                    for col, dtype in missing.items():
+                        try:
+                            conn.execute(_sql_text(f"ALTER TABLE ai_settings ADD COLUMN {col} {dtype}"))
+                            logger.info(f"   + ai_settings.{col}")
+                        except Exception as e:
+                            logger.warning(f"   ⚠️ Could not add ai_settings.{col}: {e}")
+                    conn.commit()
+                    logger.info("✅ ai_settings migration complete")
+                else:
+                    logger.info("✅ ai_settings schema is up to date")
+
+    except Exception as e:
+        logger.error(f"❌ Migration error: {e}")
+
+
+_run_startup_migrations()
 
 # ============================================
 # FastAPI App
