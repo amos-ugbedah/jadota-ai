@@ -2,7 +2,7 @@
 Base class for all trading strategies.
 """
 
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 from abc import ABC, abstractmethod
 
 
@@ -11,12 +11,11 @@ class BaseStrategy(ABC):
     NAME: str = "base"
     LABEL: str = "Base"
     DESCRIPTION: str = ""
-    RISK_LEVEL: str = "Medium"   # Low | Medium | High
+    RISK_LEVEL: str = "Medium"
     ICON: str = "📊"
     COLOR: str = "#6366f1"
     TIMEFRAME: str = "1h"
 
-    # ---- Defaults applied when this strategy is activated ----
     DEFAULT_CONFIG: Dict[str, Any] = {}
 
     def __init__(self):
@@ -26,13 +25,20 @@ class BaseStrategy(ABC):
     def generate_signal(self, ind: Dict[str, float]) -> Tuple[str, int]:
         """
         Given a dict of indicator values, return (signal, confidence).
-        signal: "BUY" | "SELL" | "HOLD"
-        confidence: 0-100
+
+        NOTE: Strategies that need to manage existing positions can override
+        with a wider signature that also accepts `position_context`:
+
+            def generate_signal(self, ind, position_context=None):
+                ...
+
+        The engine calls this method defensively — it will pass
+        `position_context` if the override accepts it, otherwise it calls
+        with `ind` only.
         """
         raise NotImplementedError
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serializable metadata for API responses."""
         return {
             "name": self.NAME,
             "label": self.LABEL,
@@ -44,17 +50,30 @@ class BaseStrategy(ABC):
             "defaults": dict(self.config),
         }
 
+    def call_generate_signal(
+        self,
+        ind: Dict[str, float],
+        position_context: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, int]:
+        """
+        Wrapper that tries the 2-arg version first, falls back to 1-arg.
+        This lets existing strategies keep working untouched while
+        position-aware strategies (DCA) can use the extra context.
+        """
+        try:
+            return self.generate_signal(ind, position_context)  # type: ignore[call-arg]
+        except TypeError:
+            return self.generate_signal(ind)
+
 
 # ============================================
-# Shared helpers
+# Shared helpers (unchanged)
 # ============================================
 def clamp_confidence(value: float) -> int:
-    """Clamp any confidence to 0-100."""
     return max(0, min(100, int(round(value))))
 
 
 def compute_trend(ind: Dict[str, float]) -> str:
-    """Return 'up' | 'down' | 'flat'."""
     close = ind["close"]
     sma7 = ind["sma_7"]
     sma25 = ind["sma_25"]
@@ -66,7 +85,6 @@ def compute_trend(ind: Dict[str, float]) -> str:
 
 
 def compute_macd_bias(ind: Dict[str, float]) -> str:
-    """Return 'bull' | 'bear' | 'neutral'."""
     hist = ind["macd_histogram"]
     macd = ind["macd"]
     sig = ind["macd_signal"]
