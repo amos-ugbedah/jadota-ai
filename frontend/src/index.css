@@ -40,15 +40,15 @@
     backdrop-filter: blur(10px);
     border: 1px solid rgba(42, 42, 74, 0.5);
   }
-  
+
   .card {
     @apply bg-[#1a1a2e] rounded-xl border border-[#2a2a4a] p-6;
   }
-  
+
   .stat-value {
     @apply text-2xl font-bold text-white;
   }
-  
+
   .stat-label {
     @apply text-gray-400 text-sm;
   }
@@ -58,10 +58,21 @@
    Mobile / PWA Enhancements
    ============================================ */
 
-/* Prevent horizontal scroll on mobile */
-html, body {
+/* 🔥 FIX: Prevent horizontal scroll WITHOUT breaking mouse wheel scroll.
+   Setting `overflow-x: hidden` on BOTH html and body breaks wheel scrolling
+   in Chrome and Safari — the browser treats `html` as the scroll container
+   but can't route wheel events to it properly. Using `overflow-x: clip`
+   on body only avoids that pitfall. */
+html {
   overflow-x: hidden;
+}
+body {
+  overflow-x: clip;
   -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Allow wheel/trackpad to scroll the whole document naturally */
+  overscroll-behavior-y: auto;
 }
 
 /* iOS Safe Area Insets — used by bottom nav and header */
@@ -70,13 +81,6 @@ html, body {
 }
 .safe-area-bottom {
   padding-bottom: env(safe-area-inset-bottom);
-}
-
-/* Better font rendering on mobile */
-body {
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  overscroll-behavior-y: none;
 }
 
 /* Minimum tap targets for accessibility */
@@ -91,7 +95,7 @@ button, a {
   }
 }
 
-/* Responsive table fallback — horizontal scroll on mobile */
+/* Responsive table fallback — smaller font on mobile */
 @media (max-width: 767px) {
   table {
     font-size: 13px;
@@ -105,21 +109,7 @@ button, a {
   }
 }
 
-/* Light scrollbar for desktop, hidden on mobile */
-*::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-*::-webkit-scrollbar-track {
-  background: transparent;
-}
-*::-webkit-scrollbar-thumb {
-  background: #2a2a4a;
-  border-radius: 4px;
-}
-*::-webkit-scrollbar-thumb:hover {
-  background: #3a3a5a;
-}
+/* Hide scrollbars on mobile only (touch scrolling doesn't need them) */
 @media (max-width: 767px) {
   *::-webkit-scrollbar {
     display: none;
