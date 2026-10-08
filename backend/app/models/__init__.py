@@ -7,9 +7,10 @@ from .backtest import BacktestRun
 from .risk import RiskSettings, RiskEvent, CapitalTracker
 from .exchange import ExchangeAccount, ExchangeOrder, ExchangeBalance
 from .live_trading import LiveAccount, LivePosition, LiveTrade
-from .subscription import SubscriptionPlan, Subscription, Payment, SubscriptionAccess
 from .admin import SystemLog, SystemMetric, AdminAction
 from .notification import Notification, NotificationPreference, EmailLog
+# 🔥 NEW: Payment model now lives in its own module
+from .payment import Payment, PaymentStatus
 
 __all__ = [
     'User',
@@ -28,14 +29,12 @@ __all__ = [
     'LiveAccount',
     'LivePosition',
     'LiveTrade',
-    'SubscriptionPlan',
-    'Subscription',
     'Payment',
-    'SubscriptionAccess',
+    'PaymentStatus',
     'SystemLog',
     'SystemMetric',
     'AdminAction',
     'Notification',
     'NotificationPreference',
-    'EmailLog'
+    'EmailLog',
 ]
