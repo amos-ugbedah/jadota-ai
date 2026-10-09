@@ -223,8 +223,6 @@ def get_db():
 # ============================================
 # 🔐 ONE-TIME ADMIN BOOTSTRAP
 # ============================================
-# NOTE: Not changed. Protected by ADMIN_BOOTSTRAP_KEY shared secret,
-# which is the intended design for one-time setup.
 @app.post("/api/v1/admin/bootstrap")
 async def admin_bootstrap(request: dict, db: Session = Depends(get_db)):
     """Promote an existing user to SUPER_ADMIN + ENTERPRISE."""
@@ -265,8 +263,6 @@ async def admin_bootstrap(request: dict, db: Session = Depends(get_db)):
 # ============================================
 # 🔍 DB DIAGNOSTIC
 # ============================================
-# 🔥 FIX (Task #1): Now admin-only. Previously exposed DB engine,
-# host (sanitized) and user_count to anyone on the internet.
 @app.get("/api/v1/debug/db-info", dependencies=[Depends(get_admin_user)])
 async def db_info(db: Session = Depends(get_db)):
     """Report which database engine is actually in use. (admin only)"""
@@ -651,8 +647,6 @@ async def verify_email(token: str, db: Session = Depends(get_db)):
 # ============================================
 # 🔥 FIX (Task #1): All 7 admin endpoints below now require
 # an authenticated user with role ADMIN or SUPER_ADMIN.
-# Uses get_admin_user from app.api.dependencies, which was
-# already present in the codebase but never applied here.
 
 @app.get("/api/v1/admin/users", dependencies=[Depends(get_admin_user)])
 async def get_admin_users(db: Session = Depends(get_db)):
@@ -902,11 +896,18 @@ async def get_ohlcv(symbol: str, interval: str = "1h", limit: int = 100):
 # ============================================
 # DEMO TRADING ENDPOINTS
 # ============================================
-# NOTE: `_demo_positions` is imported from services.position_store
-# at the top of this file, so it's shared with the analytics module.
+# 🔥 FIX (Task #2): All four demo endpoints are now scoped to the
+# authenticated user. Previously:
+#   - GET /demo/positions returned EVERY user's positions
+#   - POST /demo/positions/{id}/close let anyone close anyone's position
+#   - GET /demo/balance summed across ALL users
+# Each endpoint now filters by user_id == current_user.id.
 
 @app.post("/api/v1/demo/positions")
-async def open_demo_position(request: dict):
+async def open_demo_position(
+    request: dict,
+    current_user: User = Depends(get_current_user),
+):
     """Open a demo position with stop-loss and take-profit"""
     symbol = request.get("symbol", "BTC/USDT")
     side = request.get("side", "BUY")
@@ -934,19 +935,24 @@ async def open_demo_position(request: dict):
         "openedAt": datetime.utcnow().isoformat(),
         "status": "OPEN",
         "aiConfidence": request.get("aiConfidence", 0),
-        "aiReasoning": request.get("aiReasoning", "")
+        "aiReasoning": request.get("aiReasoning", ""),
+        "user_id": current_user.id,   # 🔥 FIX: tag ownership
     }
     
     _demo_positions.append(position)
-    logger.info(f"📈 Position OPENED: {symbol} {side} @ ${current_price:.2f} | SL: ${position['stopLoss']:.2f} | TP: ${position['takeProfit']:.2f}")
+    logger.info(f"📈 Position OPENED for user {current_user.id[:8]}: {symbol} {side} @ ${current_price:.2f} | SL: ${position['stopLoss']:.2f} | TP: ${position['takeProfit']:.2f}")
     return position
 
 @app.get("/api/v1/demo/positions")
-async def get_demo_positions():
-    """Get all demo positions with updated prices"""
+async def get_demo_positions(current_user: User = Depends(get_current_user)):
+    """Get all demo positions for the current user with updated prices"""
     updated_positions = []
     
     for pos in _demo_positions:
+        # 🔥 FIX: skip positions that belong to other users
+        if pos.get("user_id") != current_user.id:
+            continue
+        
         if pos['status'] == 'OPEN':
             current_price = market_data_service.get_price(pos['symbol'])
             if current_price > 0:
@@ -961,10 +967,20 @@ async def get_demo_positions():
     return updated_positions
 
 @app.post("/api/v1/demo/positions/{position_id}/close")
-async def close_demo_position(position_id: str):
-    """Close a demo position"""
+async def close_demo_position(
+    position_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Close a demo position (must be owned by the current user)"""
     for i, pos in enumerate(_demo_positions):
         if pos['id'] == position_id and pos['status'] == 'OPEN':
+            # 🔥 FIX: verify ownership before allowing the close
+            if pos.get("user_id") != current_user.id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You can only close your own positions"
+                )
+            
             current_price = market_data_service.get_price(pos['symbol'])
             if current_price > 0:
                 pos['currentPrice'] = current_price
@@ -981,12 +997,16 @@ async def close_demo_position(position_id: str):
     raise HTTPException(status_code=404, detail="Position not found")
 
 @app.get("/api/v1/demo/balance")
-async def get_demo_balance():
-    """Get demo balance with positions reflected"""
-    total_balance = 10000.00
+async def get_demo_balance(current_user: User = Depends(get_current_user)):
+    """Get demo balance for the current user, with only their positions counted"""
+    # 🔥 FIX: use the user's actual demo_balance instead of hardcoded 10000
+    total_balance = current_user.demo_balance if current_user.demo_balance is not None else 10000.00
     locked = 0.00
     
     for pos in _demo_positions:
+        # 🔥 FIX: only count positions that belong to this user
+        if pos.get("user_id") != current_user.id:
+            continue
         if pos['status'] == 'OPEN':
             locked += pos['entryPrice'] * pos['size']
     
