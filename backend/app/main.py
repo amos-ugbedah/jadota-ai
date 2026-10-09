@@ -27,14 +27,23 @@ from .core.security import (
     create_refresh_token, decode_token, get_token_from_header
 )
 from .models.user import User
+# 🔥 Task #3: ensure Position model is registered with Base before create_all()
+from .models.position import Position  # noqa: F401
 from .services.market_data_service import market_data_service
 from .services.ai_trading_service import ai_trading_service
 from .services.position_monitor import position_monitor
 from .services.telegram_service import telegram_service
+# 🔥 Task #3: DB-backed position store replaces the in-memory list
+from .services.position_store import (
+    list_positions,
+    get_position,
+    create_position,
+    update_position,
+    close_position,
+)
 from .api.v1 import ai_settings
-# 🔥 Analytics router + shared position store
+# 🔥 Analytics router
 from .api.v1 import analytics
-from .services.position_store import positions as _demo_positions
 # 🔥 Payments router
 from .api.v1 import payments
 # 🔥 FIX (Task #1): admin-only dependency for locking down admin endpoints
@@ -56,8 +65,6 @@ except Exception as e:
 # ============================================
 # 🔥 AUTO-MIGRATION — add missing columns to existing tables
 # Runs on every startup. Idempotent: skips columns that already exist.
-# Needed because Base.metadata.create_all() creates NEW tables but
-# does NOT add missing columns to tables that already exist.
 # ============================================
 def _run_startup_migrations():
     from sqlalchemy import text as _sql_text, inspect as _inspect
@@ -84,11 +91,7 @@ def _run_startup_migrations():
         "worst_trade": "FLOAT DEFAULT 0.0",
     }
 
-    # 🔥 NEW: Expected columns for payments
-    # Matches backend/app/models/payment.py exactly.
-    # Defaults chosen so ALTER TABLE succeeds even when rows already exist:
-    #   - NOT NULL columns in the model get a DEFAULT here
-    #   - Nullable columns are added with no default (NULL is fine)
+    # Expected columns for payments
     expected_payments = {
         "plan": "VARCHAR(50) DEFAULT 'PRO'",
         "months": "FLOAT DEFAULT 1.0",
@@ -102,6 +105,33 @@ def _run_startup_migrations():
         "expires_at": "TIMESTAMP DEFAULT NOW()",
         "verified_at": "TIMESTAMP",
         "completed_at": "TIMESTAMP",
+    }
+
+    # 🔥 Task #3: Expected columns for positions
+    # Extra columns on an older table are harmless; we only ADD what's missing.
+    expected_positions = {
+        "user_id": "VARCHAR(36)",
+        "symbol": "VARCHAR(20)",
+        "side": "VARCHAR(10)",
+        "size": "FLOAT DEFAULT 0.0",
+        "entry_price": "FLOAT DEFAULT 0.0",
+        "current_price": "FLOAT DEFAULT 0.0",
+        "unrealized_pnl": "FLOAT DEFAULT 0.0",
+        "realized_pnl": "FLOAT DEFAULT 0.0",
+        "trade_amount": "FLOAT",
+        "base_amount": "FLOAT",
+        "stop_loss": "FLOAT",
+        "take_profit": "FLOAT",
+        "stop_loss_pct": "FLOAT",
+        "take_profit_pct": "FLOAT",
+        "ai_confidence": "FLOAT",
+        "ai_reasoning": "TEXT",
+        "status": "VARCHAR(20) DEFAULT 'OPEN'",
+        "close_reason": "VARCHAR(30)",
+        "opened_at": "TIMESTAMP DEFAULT NOW()",
+        "closed_at": "TIMESTAMP",
+        "created_at": "TIMESTAMP DEFAULT NOW()",
+        "updated_at": "TIMESTAMP",
     }
 
     try:
@@ -142,6 +172,23 @@ def _run_startup_migrations():
                     logger.info("✅ payments migration complete")
                 else:
                     logger.info("✅ payments schema is up to date")
+
+            # ---------- positions (Task #3) ----------
+            if "positions" in tables:
+                actual = {c["name"] for c in inspector.get_columns("positions")}
+                missing = {k: v for k, v in expected_positions.items() if k not in actual}
+                if missing:
+                    logger.info(f"🔧 positions: adding {len(missing)} missing column(s)")
+                    for col, dtype in missing.items():
+                        try:
+                            conn.execute(_sql_text(f"ALTER TABLE positions ADD COLUMN {col} {dtype}"))
+                            logger.info(f"   + positions.{col}")
+                        except Exception as e:
+                            logger.warning(f"   ⚠️ Could not add positions.{col}: {e}")
+                    conn.commit()
+                    logger.info("✅ positions migration complete")
+                else:
+                    logger.info("✅ positions schema is up to date")
 
     except Exception as e:
         logger.error(f"❌ Migration error: {e}")
@@ -191,8 +238,6 @@ app.add_middleware(
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """Catch-all for unhandled exceptions."""
     logger.error(f"❌ Unhandled exception on {request.method} {request.url.path}")
-    # 🔥 Use format_exception(exc) directly — format_exc() can return
-    #    "NoneType: None" inside async exception handlers.
     logger.error(
         "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     )
@@ -894,19 +939,16 @@ async def get_ohlcv(symbol: str, interval: str = "1h", limit: int = 100):
     return []
 
 # ============================================
-# DEMO TRADING ENDPOINTS
+# DEMO TRADING ENDPOINTS (Task #3: DB-backed)
 # ============================================
-# 🔥 FIX (Task #2): All four demo endpoints are now scoped to the
-# authenticated user. Previously:
-#   - GET /demo/positions returned EVERY user's positions
-#   - POST /demo/positions/{id}/close let anyone close anyone's position
-#   - GET /demo/balance summed across ALL users
-# Each endpoint now filters by user_id == current_user.id.
+# All four endpoints are scoped to the authenticated user and write to
+# the `positions` table via services.position_store.
 
 @app.post("/api/v1/demo/positions")
 async def open_demo_position(
     request: dict,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """Open a demo position with stop-loss and take-profit"""
     symbol = request.get("symbol", "BTC/USDT")
@@ -914,13 +956,14 @@ async def open_demo_position(
     size = request.get("size", 0.001)
     stop_loss_pct = request.get("stopLossPct", 0.02)
     take_profit_pct = request.get("takeProfitPct", 0.04)
-    
+
     current_price = market_data_service.get_price(symbol)
     if current_price == 0:
         current_price = 45000.00
-    
-    position = {
+
+    position = create_position(db, {
         "id": str(uuid.uuid4()),
+        "user_id": current_user.id,
         "symbol": symbol,
         "side": side,
         "size": size,
@@ -936,80 +979,64 @@ async def open_demo_position(
         "status": "OPEN",
         "aiConfidence": request.get("aiConfidence", 0),
         "aiReasoning": request.get("aiReasoning", ""),
-        "user_id": current_user.id,   # 🔥 FIX: tag ownership
-    }
-    
-    _demo_positions.append(position)
+    })
+
     logger.info(f"📈 Position OPENED for user {current_user.id[:8]}: {symbol} {side} @ ${current_price:.2f} | SL: ${position['stopLoss']:.2f} | TP: ${position['takeProfit']:.2f}")
     return position
 
 @app.get("/api/v1/demo/positions")
-async def get_demo_positions(current_user: User = Depends(get_current_user)):
+async def get_demo_positions(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Get all demo positions for the current user with updated prices"""
-    updated_positions = []
-    
-    for pos in _demo_positions:
-        # 🔥 FIX: skip positions that belong to other users
-        if pos.get("user_id") != current_user.id:
-            continue
-        
-        if pos['status'] == 'OPEN':
-            current_price = market_data_service.get_price(pos['symbol'])
+    positions = list_positions(db, user_id=current_user.id)
+    out = []
+    for pos in positions:
+        if pos.get("status") == "OPEN":
+            current_price = market_data_service.get_price(pos["symbol"])
             if current_price > 0:
-                pos['currentPrice'] = current_price
-                if pos['side'] == 'BUY':
-                    pos['unrealizedPnl'] = (current_price - pos['entryPrice']) * pos['size']
+                pos["currentPrice"] = current_price
+                if pos["side"] == "BUY":
+                    pos["unrealizedPnl"] = (current_price - pos["entryPrice"]) * pos["size"]
                 else:
-                    pos['unrealizedPnl'] = (pos['entryPrice'] - current_price) * pos['size']
-        
-        updated_positions.append(pos.copy())
-    
-    return updated_positions
+                    pos["unrealizedPnl"] = (pos["entryPrice"] - current_price) * pos["size"]
+                update_position(db, pos["id"], {
+                    "currentPrice": current_price,
+                    "unrealizedPnl": pos["unrealizedPnl"],
+                })
+        out.append(pos)
+    return out
 
 @app.post("/api/v1/demo/positions/{position_id}/close")
 async def close_demo_position(
     position_id: str,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """Close a demo position (must be owned by the current user)"""
-    for i, pos in enumerate(_demo_positions):
-        if pos['id'] == position_id and pos['status'] == 'OPEN':
-            # 🔥 FIX: verify ownership before allowing the close
-            if pos.get("user_id") != current_user.id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You can only close your own positions"
-                )
-            
-            current_price = market_data_service.get_price(pos['symbol'])
-            if current_price > 0:
-                pos['currentPrice'] = current_price
-                if pos['side'] == 'BUY':
-                    pos['realizedPnl'] = (current_price - pos['entryPrice']) * pos['size']
-                else:
-                    pos['realizedPnl'] = (pos['entryPrice'] - current_price) * pos['size']
-            
-            pos['status'] = 'CLOSED'
-            pos['closedAt'] = datetime.utcnow().isoformat()
-            
-            return {"success": True, "position": pos}
-    
-    raise HTTPException(status_code=404, detail="Position not found")
+    pos = get_position(db, position_id)
+    if not pos or pos.get("status") != "OPEN":
+        raise HTTPException(status_code=404, detail="Position not found")
+    if pos.get("user_id") != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only close your own positions"
+        )
+
+    current_price = market_data_service.get_price(pos["symbol"])
+    closed = close_position(db, position_id, "MANUAL", exit_price=current_price or None)
+    return {"success": True, "position": closed}
 
 @app.get("/api/v1/demo/balance")
-async def get_demo_balance(current_user: User = Depends(get_current_user)):
+async def get_demo_balance(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Get demo balance for the current user, with only their positions counted"""
-    # 🔥 FIX: use the user's actual demo_balance instead of hardcoded 10000
     total_balance = current_user.demo_balance if current_user.demo_balance is not None else 10000.00
-    locked = 0.00
-    
-    for pos in _demo_positions:
-        # 🔥 FIX: only count positions that belong to this user
-        if pos.get("user_id") != current_user.id:
-            continue
-        if pos['status'] == 'OPEN':
-            locked += pos['entryPrice'] * pos['size']
-    
+    open_positions = list_positions(db, user_id=current_user.id, status="OPEN")
+    locked = sum((p.get("entryPrice") or 0) * (p.get("size") or 0) for p in open_positions)
     return {
         "total": total_balance,
         "available": total_balance - locked,
@@ -1048,12 +1075,12 @@ async def ai_status():
     }
 
 # ============================================
-# AUTO-TRADING ENDPOINTS WITH TELEGRAM
+# AUTO-TRADING ENDPOINTS WITH TELEGRAM (Task #3: DB-backed)
 # ============================================
 
 async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = None):
     """
-    Execute a trade based on AI signal.
+    Execute a trade based on AI signal. Writes to the `positions` table.
 
     Supported sides: BUY, SELL, ADD.
       - BUY / SELL create a new position
@@ -1066,9 +1093,9 @@ async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = 
     stop_loss_pct = 0.02
     take_profit_pct = 0.04
 
-    if user_id:
-        db = SessionLocal()
-        try:
+    db = SessionLocal()
+    try:
+        if user_id:
             user_settings = db.query(AISettings).filter(
                 AISettings.user_id == user_id
             ).first()
@@ -1076,93 +1103,87 @@ async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = 
                 base_amount = user_settings.trade_amount or 25.0
                 stop_loss_pct = (user_settings.stop_loss_percent or 2.0) / 100
                 take_profit_pct = (user_settings.take_profit_percent or 4.0) / 100
-        finally:
-            db.close()
 
-    current_price = market_data_service.get_price(symbol)
-    if current_price == 0:
-        current_price = 45000.00
+        current_price = market_data_service.get_price(symbol)
+        if current_price == 0:
+            current_price = 45000.00
 
-    confidence = signal.get("confidence", 50)
-    trade_amount = ai_trading_service.calculate_trade_amount(base_amount, confidence)
-    size = trade_amount / current_price
+        confidence = signal.get("confidence", 50)
+        trade_amount = ai_trading_service.calculate_trade_amount(base_amount, confidence)
+        size = trade_amount / current_price
 
-    # ============================================
-    # ADD — merge into existing OPEN position
-    # ============================================
-    if side == "ADD":
-        existing = None
-        for p in _demo_positions:
-            if (
-                p.get("user_id") == user_id
-                and p.get("symbol") == symbol
-                and p.get("status") == "OPEN"
-            ):
-                existing = p
-                break
+        # ============================================
+        # ADD — merge into existing OPEN position
+        # ============================================
+        if side == "ADD":
+            open_positions = list_positions(db, user_id=user_id, status="OPEN")
+            existing = next((p for p in open_positions if p["symbol"] == symbol), None)
 
-        if existing:
-            old_size = float(existing.get("size", 0))
-            old_price = float(existing.get("entryPrice", 0))
-            new_size = old_size + size
-            if new_size > 0:
-                avg_price = (old_size * old_price + size * current_price) / new_size
-            else:
-                avg_price = current_price
+            if existing:
+                old_size = float(existing.get("size") or 0)
+                old_price = float(existing.get("entryPrice") or 0)
+                new_size = old_size + size
+                if new_size > 0:
+                    avg_price = (old_size * old_price + size * current_price) / new_size
+                else:
+                    avg_price = current_price
 
-            existing["size"] = round(new_size, 6)
-            existing["entryPrice"] = round(avg_price, 2)
-            existing["currentPrice"] = current_price
-            existing["tradeAmount"] = (existing.get("tradeAmount", 0) or 0) + trade_amount
-            existing["stopLoss"] = round(avg_price * (1 - stop_loss_pct), 2)
-            existing["takeProfit"] = round(avg_price * (1 + take_profit_pct), 2)
+                updated = update_position(db, existing["id"], {
+                    "size": round(new_size, 6),
+                    "entryPrice": round(avg_price, 2),
+                    "currentPrice": current_price,
+                    "tradeAmount": (existing.get("tradeAmount") or 0) + trade_amount,
+                    "stopLoss": round(avg_price * (1 - stop_loss_pct), 2),
+                    "takeProfit": round(avg_price * (1 + take_profit_pct), 2),
+                })
 
-            logger.info(
-                f"💰 DCA ADD: {symbol} | "
-                f"Old {old_size:.6f}@{old_price:.2f} + "
-                f"New {size:.6f}@{current_price:.2f} = "
-                f"Avg {new_size:.6f}@{avg_price:.2f}"
-            )
-            await telegram_service.send_trade_alert(existing, "ADD")
-            return existing
+                logger.info(
+                    f"💰 DCA ADD: {symbol} | "
+                    f"Old {old_size:.6f}@{old_price:.2f} + "
+                    f"New {size:.6f}@{current_price:.2f} = "
+                    f"Avg {new_size:.6f}@{avg_price:.2f}"
+                )
+                await telegram_service.send_trade_alert(updated, "ADD")
+                return updated
 
-        # No existing position — treat as BUY
-        side = "BUY"
+            # No existing position — treat as BUY
+            side = "BUY"
 
-    # ============================================
-    # Normal BUY / SELL — create new position
-    # ============================================
-    position = {
-        "id": str(uuid.uuid4()),
-        "symbol": symbol,
-        "side": side,
-        "size": round(size, 6),
-        "entryPrice": current_price,
-        "currentPrice": current_price,
-        "unrealizedPnl": 0.00,
-        "realizedPnl": 0.00,
-        "tradeAmount": trade_amount,
-        "baseAmount": base_amount,
-        "stopLoss": round(current_price * (1 - stop_loss_pct), 2),
-        "takeProfit": round(current_price * (1 + take_profit_pct), 2),
-        "stopLossPct": stop_loss_pct,
-        "takeProfitPct": take_profit_pct,
-        "openedAt": datetime.utcnow().isoformat(),
-        "status": "OPEN",
-        "aiConfidence": confidence,
-        "aiReasoning": signal.get("reasoning", "AI signal"),
-        "user_id": user_id,
-    }
+        # ============================================
+        # Normal BUY / SELL — create new position
+        # ============================================
+        position = create_position(db, {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "symbol": symbol,
+            "side": side,
+            "size": round(size, 6),
+            "entryPrice": current_price,
+            "currentPrice": current_price,
+            "unrealizedPnl": 0.00,
+            "realizedPnl": 0.00,
+            "tradeAmount": trade_amount,
+            "baseAmount": base_amount,
+            "stopLoss": round(current_price * (1 - stop_loss_pct), 2),
+            "takeProfit": round(current_price * (1 + take_profit_pct), 2),
+            "stopLossPct": stop_loss_pct,
+            "takeProfitPct": take_profit_pct,
+            "openedAt": datetime.utcnow().isoformat(),
+            "status": "OPEN",
+            "aiConfidence": confidence,
+            "aiReasoning": signal.get("reasoning", "AI signal"),
+        })
 
-    _demo_positions.append(position)
-    logger.info(
-        f"🤖 AI Trade: {side} {symbol} | "
-        f"Base ${base_amount} × {confidence}% = ${trade_amount} | "
-        f"Size {size:.6f}"
-    )
+        logger.info(
+            f"🤖 AI Trade: {side} {symbol} | "
+            f"Base ${base_amount} × {confidence}% = ${trade_amount} | "
+            f"Size {size:.6f}"
+        )
 
-    await telegram_service.send_trade_alert(position, "OPEN")
-    return position
+        await telegram_service.send_trade_alert(position, "OPEN")
+        return position
+    finally:
+        db.close()
 
 @app.post("/api/v1/ai/auto-trade")
 async def auto_trade(
@@ -1192,10 +1213,7 @@ async def auto_trade(
     strategy_name = getattr(settings, "strategy_type", None) or "balanced"
 
     # 🔥 Build user's current OPEN positions once — passed to every analysis
-    user_positions = [
-        p for p in _demo_positions
-        if p.get("user_id") == current_user.id and p.get("status") == "OPEN"
-    ]
+    user_positions = list_positions(db, user_id=current_user.id, status="OPEN")
 
     # Analyze each symbol with strategy + position context
     signals = {}
@@ -1231,28 +1249,31 @@ async def auto_trade(
     }
 
 @app.get("/api/v1/ai/portfolio")
-async def get_ai_portfolio(current_user: User = Depends(get_current_user)):
+async def get_ai_portfolio(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Get user's AI trading portfolio"""
     portfolio = {"total_value": 0, "total_pnl": 0, "positions": []}
-    
-    for pos in _demo_positions:
-        if pos.get('user_id') != current_user.id:
-            continue
-        if pos['status'] != 'OPEN':
-            continue
-        
-        current_price = market_data_service.get_price(pos['symbol'])
+
+    positions = list_positions(db, user_id=current_user.id, status="OPEN")
+    for pos in positions:
+        current_price = market_data_service.get_price(pos["symbol"])
         if current_price > 0:
-            pos['currentPrice'] = current_price
-            if pos['side'] == 'BUY':
-                pos['unrealizedPnl'] = (current_price - pos['entryPrice']) * pos['size']
+            pos["currentPrice"] = current_price
+            if pos["side"] == "BUY":
+                pos["unrealizedPnl"] = (current_price - pos["entryPrice"]) * pos["size"]
             else:
-                pos['unrealizedPnl'] = (pos['entryPrice'] - current_price) * pos['size']
-        
-        portfolio['positions'].append(pos)
-        portfolio['total_value'] += pos['currentPrice'] * pos['size']
-        portfolio['total_pnl'] += pos['unrealizedPnl']
-    
+                pos["unrealizedPnl"] = (pos["entryPrice"] - current_price) * pos["size"]
+            update_position(db, pos["id"], {
+                "currentPrice": current_price,
+                "unrealizedPnl": pos["unrealizedPnl"],
+            })
+
+        portfolio["positions"].append(pos)
+        portfolio["total_value"] += (pos["currentPrice"] or 0) * (pos["size"] or 0)
+        portfolio["total_pnl"] += (pos["unrealizedPnl"] or 0)
+
     return portfolio
 
 @app.get("/api/v1/ai/trade-history")
@@ -1388,7 +1409,9 @@ async def startup_event():
     prices = market_data_service.get_market_prices()
     logger.info(f"📊 Loaded {len(prices)} market prices")
     
-    await position_monitor.start(_demo_positions, market_data_service)
+    # 🔥 Task #3: position_monitor no longer receives a list reference —
+    # it reads from the positions table on each tick.
+    await position_monitor.start(market_data_service)
     logger.info("✅ Position Monitor started")
     
     logger.info("✅ JADOTA AI API started successfully")

@@ -2,9 +2,7 @@
 Advanced Analytics endpoints.
 
 All endpoints require auth and return data for the current user only.
-
-Data source: `services.position_store.positions` — the same in-memory list
-that `main.py` writes to when opening/closing demo trades.
+Data source: `services.position_store` — backed by the `positions` table.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Query, status
@@ -18,7 +16,10 @@ import statistics
 from ...core.database import SessionLocal
 from ...core.security import decode_token, get_token_from_header
 from ...models.user import User
-from ...services.position_store import positions as _all_positions
+from ...services.position_store import (
+    list_positions,
+    create_position as store_create_position,
+)
 
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
@@ -69,19 +70,15 @@ async def get_current_user(
 # ============================================
 # Helpers
 # ============================================
-def _positions_for(user_id: str) -> List[Dict[str, Any]]:
+def _positions_for(db: Session, user_id: str) -> List[Dict[str, Any]]:
     """Return all positions belonging to a user."""
-    return [p for p in _all_positions if p.get("user_id") == user_id]
+    return list_positions(db, user_id=user_id)
 
 
-def _closed_for(user_id: str) -> List[Dict[str, Any]]:
+def _closed_for(db: Session, user_id: str) -> List[Dict[str, Any]]:
     """Return all CLOSED positions for a user, sorted by close time."""
-    closed = [
-        p
-        for p in _positions_for(user_id)
-        if p.get("status") == "CLOSED" and p.get("closedAt")
-    ]
-    closed.sort(key=lambda p: p.get("closedAt", ""))
+    closed = list_positions(db, user_id=user_id, status="CLOSED")
+    closed.sort(key=lambda p: p.get("closedAt") or "")
     return closed
 
 
@@ -105,13 +102,16 @@ def _safe_float(v: Any, default: float = 0.0) -> float:
 # 1. SUMMARY — high level stats
 # ============================================
 @router.get("/summary")
-async def get_summary(current_user: User = Depends(get_current_user)):
+async def get_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     High-level performance summary:
     total trades, win rate, avg win/loss, profit factor, best/worst trade, streaks.
     """
-    all_pos = _positions_for(current_user.id)
-    closed = _closed_for(current_user.id)
+    all_pos = _positions_for(db, current_user.id)
+    closed = _closed_for(db, current_user.id)
     open_pos = [p for p in all_pos if p.get("status") == "OPEN"]
 
     if not closed:
@@ -192,6 +192,7 @@ async def get_summary(current_user: User = Depends(get_current_user)):
 async def get_equity_curve(
     days: int = Query(30, ge=1, le=365),
     initial_balance: float = Query(10000.0, gt=0),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -200,7 +201,7 @@ async def get_equity_curve(
     Shape:
       [{"time": "2026-09-01", "value": 10045.2, "dailyPnl": 45.2}, ...]
     """
-    closed = _closed_for(current_user.id)
+    closed = _closed_for(db, current_user.id)
 
     end_date = datetime.utcnow().date()
     start_date = end_date - timedelta(days=days - 1)
@@ -217,7 +218,7 @@ async def get_equity_curve(
         daily_pnl[d] += _safe_float(p.get("realizedPnl"))
 
     # Also include today's unrealized P&L into the final point (mark-to-market)
-    open_positions = [p for p in _positions_for(current_user.id) if p.get("status") == "OPEN"]
+    open_positions = [p for p in _positions_for(db, current_user.id) if p.get("status") == "OPEN"]
 
     points: List[Dict[str, Any]] = []
     balance = initial_balance
@@ -257,6 +258,7 @@ async def get_equity_curve(
 async def get_drawdown(
     days: int = Query(30, ge=1, le=365),
     initial_balance: float = Query(10000.0, gt=0),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -265,7 +267,9 @@ async def get_drawdown(
     `value` is negative percentage from peak.
     """
     # Reuse equity logic
-    equity = await get_equity_curve(days=days, initial_balance=initial_balance, current_user=current_user)
+    equity = await get_equity_curve(
+        days=days, initial_balance=initial_balance, db=db, current_user=current_user
+    )
     points = equity["points"]
 
     peak = initial_balance
@@ -297,12 +301,15 @@ async def get_drawdown(
 # 4. WIN/LOSS HISTOGRAM
 # ============================================
 @router.get("/win-loss")
-async def get_win_loss(current_user: User = Depends(get_current_user)):
+async def get_win_loss(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     Bucketed histogram of realized P&L.
     Returns fixed buckets with counts.
     """
-    closed = _closed_for(current_user.id)
+    closed = _closed_for(db, current_user.id)
     pnls = [_safe_float(p.get("realizedPnl")) for p in closed]
 
     # Fixed buckets (dollar amounts)
@@ -343,11 +350,14 @@ async def get_win_loss(current_user: User = Depends(get_current_user)):
 # 5. BY SYMBOL — best/worst performers
 # ============================================
 @router.get("/by-symbol")
-async def get_by_symbol(current_user: User = Depends(get_current_user)):
+async def get_by_symbol(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     Per-symbol performance breakdown.
     """
-    closed = _closed_for(current_user.id)
+    closed = _closed_for(db, current_user.id)
 
     by_sym: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
         "symbol": "",
@@ -405,12 +415,13 @@ async def get_by_symbol(current_user: User = Depends(get_current_user)):
 @router.get("/monthly-heatmap")
 async def get_monthly_heatmap(
     months: int = Query(6, ge=1, le=24),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     Monthly P&L aggregation for a heatmap.
     """
-    closed = _closed_for(current_user.id)
+    closed = _closed_for(db, current_user.id)
 
     now = datetime.utcnow()
     # Build list of (year, month) for the last N months
@@ -465,12 +476,15 @@ async def get_ratios(
     days: int = Query(30, ge=1, le=365),
     initial_balance: float = Query(10000.0, gt=0),
     risk_free_rate: float = Query(0.0),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     Risk-adjusted performance metrics computed from daily returns.
     """
-    equity = await get_equity_curve(days=days, initial_balance=initial_balance, current_user=current_user)
+    equity = await get_equity_curve(
+        days=days, initial_balance=initial_balance, db=db, current_user=current_user
+    )
     points = equity["points"]
 
     # Compute daily returns
@@ -501,7 +515,9 @@ async def get_ratios(
     sharpe = ((mean_r - risk_free_rate) / std_r * math.sqrt(365)) if std_r > 0 else 0.0
     sortino = ((mean_r - risk_free_rate) / downside_std * math.sqrt(365)) if downside_std > 0 else 0.0
 
-    dd_resp = await get_drawdown(days=days, initial_balance=initial_balance, current_user=current_user)
+    dd_resp = await get_drawdown(
+        days=days, initial_balance=initial_balance, db=db, current_user=current_user
+    )
     max_dd = dd_resp["max_drawdown_pct"]
 
     # Calmar = annualized return / |max drawdown|
@@ -528,12 +544,13 @@ async def get_trade_journal(
     limit: int = Query(100, ge=1, le=500),
     symbol: Optional[str] = None,
     status_filter: Optional[str] = Query(None, alias="status"),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     Filterable list of all trades (open + closed), newest first.
     """
-    trades = _positions_for(current_user.id)
+    trades = _positions_for(db, current_user.id)
 
     if symbol:
         trades = [t for t in trades if t.get("symbol") == symbol]
@@ -541,7 +558,7 @@ async def get_trade_journal(
         trades = [t for t in trades if t.get("status") == status_filter.upper()]
 
     # Sort newest first (openedAt desc)
-    trades.sort(key=lambda t: t.get("openedAt", ""), reverse=True)
+    trades.sort(key=lambda t: t.get("openedAt") or "", reverse=True)
     trades = trades[:limit]
 
     # Slimmed down view
@@ -572,6 +589,7 @@ async def get_trade_journal(
 @router.post("/seed-demo-data")
 async def seed_demo_data(
     request: dict,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -611,8 +629,9 @@ async def seed_demo_data(
         closed = opened + timedelta(hours=random.randint(1, 24))
 
         entry = round(random.uniform(20000, 90000), 2)
-        _all_positions.append({
+        store_create_position(db, {
             "id": str(uuid.uuid4()),
+            "user_id": current_user.id,
             "symbol": sym,
             "side": random.choice(["BUY", "SELL"]),
             "size": round(random.uniform(0.001, 0.01), 6),
@@ -627,9 +646,9 @@ async def seed_demo_data(
             "openedAt": opened.isoformat(),
             "closedAt": closed.isoformat(),
             "status": "CLOSED",
+            "closeReason": "SEEDED",
             "aiConfidence": random.randint(55, 92),
             "aiReasoning": "Seeded demo data",
-            "user_id": current_user.id,
         })
         generated += 1
 
