@@ -84,6 +84,26 @@ def _run_startup_migrations():
         "worst_trade": "FLOAT DEFAULT 0.0",
     }
 
+    # 🔥 NEW: Expected columns for payments
+    # Matches backend/app/models/payment.py exactly.
+    # Defaults chosen so ALTER TABLE succeeds even when rows already exist:
+    #   - NOT NULL columns in the model get a DEFAULT here
+    #   - Nullable columns are added with no default (NULL is fine)
+    expected_payments = {
+        "plan": "VARCHAR(50) DEFAULT 'PRO'",
+        "months": "FLOAT DEFAULT 1.0",
+        "amount_usdt": "FLOAT DEFAULT 0.0",
+        "network": "VARCHAR(20) DEFAULT 'BEP20'",
+        "wallet_address": "VARCHAR(100) DEFAULT ''",
+        "status": "VARCHAR(20) DEFAULT 'pending'",
+        "tx_hash": "VARCHAR(100)",
+        "admin_notes": "TEXT",
+        "created_at": "TIMESTAMP DEFAULT NOW()",
+        "expires_at": "TIMESTAMP DEFAULT NOW()",
+        "verified_at": "TIMESTAMP",
+        "completed_at": "TIMESTAMP",
+    }
+
     try:
         inspector = _inspect(engine)
         tables = set(inspector.get_table_names())
@@ -105,6 +125,23 @@ def _run_startup_migrations():
                     logger.info("✅ ai_settings migration complete")
                 else:
                     logger.info("✅ ai_settings schema is up to date")
+
+            # ---------- payments ----------
+            if "payments" in tables:
+                actual = {c["name"] for c in inspector.get_columns("payments")}
+                missing = {k: v for k, v in expected_payments.items() if k not in actual}
+                if missing:
+                    logger.info(f"🔧 payments: adding {len(missing)} missing column(s)")
+                    for col, dtype in missing.items():
+                        try:
+                            conn.execute(_sql_text(f"ALTER TABLE payments ADD COLUMN {col} {dtype}"))
+                            logger.info(f"   + payments.{col}")
+                        except Exception as e:
+                            logger.warning(f"   ⚠️ Could not add payments.{col}: {e}")
+                    conn.commit()
+                    logger.info("✅ payments migration complete")
+                else:
+                    logger.info("✅ payments schema is up to date")
 
     except Exception as e:
         logger.error(f"❌ Migration error: {e}")
