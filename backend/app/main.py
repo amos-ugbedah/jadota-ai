@@ -37,6 +37,8 @@ from .api.v1 import analytics
 from .services.position_store import positions as _demo_positions
 # 🔥 Payments router
 from .api.v1 import payments
+# 🔥 FIX (Task #1): admin-only dependency for locking down admin endpoints
+from .api.dependencies import get_admin_user
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -184,6 +186,8 @@ def get_db():
 # ============================================
 # 🔐 ONE-TIME ADMIN BOOTSTRAP
 # ============================================
+# NOTE: Not changed. Protected by ADMIN_BOOTSTRAP_KEY shared secret,
+# which is the intended design for one-time setup.
 @app.post("/api/v1/admin/bootstrap")
 async def admin_bootstrap(request: dict, db: Session = Depends(get_db)):
     """Promote an existing user to SUPER_ADMIN + ENTERPRISE."""
@@ -224,9 +228,11 @@ async def admin_bootstrap(request: dict, db: Session = Depends(get_db)):
 # ============================================
 # 🔍 DB DIAGNOSTIC
 # ============================================
-@app.get("/api/v1/debug/db-info")
+# 🔥 FIX (Task #1): Now admin-only. Previously exposed DB engine,
+# host (sanitized) and user_count to anyone on the internet.
+@app.get("/api/v1/debug/db-info", dependencies=[Depends(get_admin_user)])
 async def db_info(db: Session = Depends(get_db)):
-    """Report which database engine is actually in use."""
+    """Report which database engine is actually in use. (admin only)"""
     try:
         engine_name = db.bind.dialect.name if db.bind else "unknown"
     except Exception:
@@ -606,8 +612,12 @@ async def verify_email(token: str, db: Session = Depends(get_db)):
 # ============================================
 # ADMIN ENDPOINTS
 # ============================================
+# 🔥 FIX (Task #1): All 7 admin endpoints below now require
+# an authenticated user with role ADMIN or SUPER_ADMIN.
+# Uses get_admin_user from app.api.dependencies, which was
+# already present in the codebase but never applied here.
 
-@app.get("/api/v1/admin/users")
+@app.get("/api/v1/admin/users", dependencies=[Depends(get_admin_user)])
 async def get_admin_users(db: Session = Depends(get_db)):
     """Get all users (admin only)"""
     users = db.query(User).all()
@@ -627,12 +637,12 @@ async def get_admin_users(db: Session = Depends(get_db)):
         for u in users
     ]
 
-@app.get("/api/v1/admin/subscriptions")
+@app.get("/api/v1/admin/subscriptions", dependencies=[Depends(get_admin_user)])
 async def get_admin_subscriptions():
     """Get all subscriptions (admin only)"""
     return []
 
-@app.get("/api/v1/admin/system/status")
+@app.get("/api/v1/admin/system/status", dependencies=[Depends(get_admin_user)])
 async def get_system_status():
     """Get system status (admin only)"""
     return {
@@ -645,7 +655,7 @@ async def get_system_status():
         "drawdown": 0
     }
 
-@app.get("/api/v1/admin/revenue")
+@app.get("/api/v1/admin/revenue", dependencies=[Depends(get_admin_user)])
 async def get_revenue():
     """Get revenue stats (admin only)"""
     return {
@@ -654,7 +664,7 @@ async def get_revenue():
         "pending": 0
     }
 
-@app.get("/api/v1/admin/system/health")
+@app.get("/api/v1/admin/system/health", dependencies=[Depends(get_admin_user)])
 async def get_system_health():
     """Get system health (admin only)"""
     return {
@@ -665,12 +675,12 @@ async def get_system_health():
         "timestamp": datetime.utcnow().isoformat()
     }
 
-@app.get("/api/v1/admin/system/logs")
+@app.get("/api/v1/admin/system/logs", dependencies=[Depends(get_admin_user)])
 async def get_system_logs():
     """Get system logs (admin only)"""
     return ["System started", "User logged in", "Demo trade executed"]
 
-@app.get("/api/v1/admin/ai/status")
+@app.get("/api/v1/admin/ai/status", dependencies=[Depends(get_admin_user)])
 async def get_ai_status():
     """Get AI status (admin only)"""
     return {
