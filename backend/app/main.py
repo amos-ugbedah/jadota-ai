@@ -1468,27 +1468,58 @@ async def test_telegram():
         )
 
 # ============================================
-# TRADING ENDPOINTS (legacy stubs — kept for compat)
+# TRADING ENDPOINTS — now backed by the DB
 # ============================================
+# Previously these were stubs returning []. The Trading page and Positions
+# page both call /api/v1/trading/positions via the frontend's tradingStore,
+# so they MUST return real positions to reflect what's on Bitget.
 
 @app.get("/api/v1/trading/positions")
-async def get_positions():
-    """Get live trading positions"""
-    return []
+async def get_positions(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get current user's positions (open + closed) with live prices."""
+    positions = list_positions(db, user_id=current_user.id)
+    out = []
+    for pos in positions:
+        if pos.get("status") == "OPEN":
+            current_price = market_data_service.get_price(pos["symbol"])
+            if current_price and current_price > 0:
+                pos["currentPrice"] = current_price
+                if pos["side"] == "BUY":
+                    pos["unrealizedPnl"] = (current_price - pos["entryPrice"]) * pos["size"]
+                else:
+                    pos["unrealizedPnl"] = (pos["entryPrice"] - current_price) * pos["size"]
+                update_position(db, pos["id"], {
+                    "currentPrice": current_price,
+                    "unrealizedPnl": pos["unrealizedPnl"],
+                })
+        out.append(pos)
+    return out
+
 
 @app.get("/api/v1/trading/balance")
-async def get_balance():
-    """Get live trading balance"""
+async def get_balance(
+    current_user: User = Depends(get_current_user),
+):
+    """Get the user's demo balance (live balance shown separately)."""
+    total = current_user.demo_balance if current_user.demo_balance is not None else 10000.0
     return {
-        "total": 0.00,
-        "available": 0.00,
-        "locked": 0.00
+        "total": total,
+        "available": total,
+        "locked": 0.0,
     }
 
+
 @app.get("/api/v1/trading/history")
-async def get_live_trade_history():
-    """Get live trading history"""
-    return []
+async def get_live_trade_history(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get closed positions for the current user."""
+    positions = list_positions(db, user_id=current_user.id, status="CLOSED")
+    return positions
 
 # ============================================
 # Health Check
