@@ -50,6 +50,13 @@ from .services.encryption import decrypt
 from .services.bitget_client import BitgetClient, BitgetError
 # 🔥 Task #4b: reconciliation service
 from .services.reconciliation import reconciliation_service
+# 🔥 Trade executor (extracted so auto_trader can reuse it without circular imports)
+from .services.trade_executor import (
+    place_bitget_order as _place_bitget_order,
+    execute_ai_trade,
+)
+# 🔥 Background auto-trader service
+from .services.auto_trader import auto_trader
 from .api.v1 import ai_settings
 # 🔥 Analytics router
 from .api.v1 import analytics
@@ -860,6 +867,13 @@ async def admin_trigger_reconciliation():
     summary = await reconciliation_service.run_once()
     return {"success": True, **summary}
 
+# 🔥 Auto-trader manual trigger (admin only)
+@app.post("/api/v1/admin/auto-trader/run", dependencies=[Depends(get_admin_user)])
+async def admin_trigger_auto_trader():
+    """Manually trigger one auto-trader pass. (admin only)"""
+    summary = await auto_trader.run_once()
+    return {"success": True, **summary}
+
 # ============================================
 # SUBSCRIPTION ENDPOINTS
 # ============================================
@@ -1137,7 +1151,6 @@ async def ai_analyze_symbol(symbol: str, timeframe: str = "1h"):
     return result
 
 
-# 🔥 This route was missing after the last reorder. Restored.
 @app.get("/api/v1/ai/status")
 async def ai_status():
     """Get AI engine status"""
@@ -1147,229 +1160,13 @@ async def ai_status():
         "last_update": datetime.utcnow().isoformat(),
     }
 
+
 # ============================================
-# AUTO-TRADING + MANUAL-ORDER HELPERS
+# AUTO-TRADING ENDPOINT (manual trigger)
 # ============================================
-
-async def _place_bitget_order(
-    cred: ExchangeCredentials,
-    db: Session,
-    symbol: str,
-    side: str,
-    trade_amount: float,
-    base_size: float,
-) -> str:
-    """
-    Place a spot market order on Bitget for a connected user.
-
-    Side handling — matches Bitget v2 spot semantics:
-      - BUY / ADD → order side "buy",  size is the QUOTE amount (USDT to spend)
-      - SELL      → order side "sell", size is the BASE amount (coins to sell)
-
-    Raises HTTPException on any failure — the caller must NOT create a
-    position row when this function raises.
-    """
-    api_key = decrypt(cred.api_key_encrypted)
-    api_secret = decrypt(cred.api_secret_encrypted)
-    passphrase = decrypt(cred.passphrase_encrypted)
-
-    if not (api_key and api_secret and passphrase):
-        logger.error(f"bitget.decrypt.failed user={cred.user_id}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Stored Bitget credentials cannot be decrypted. "
-                   "Please disconnect and reconnect your Bitget account.",
-        )
-
-    bitget_symbol = symbol.replace("/", "")
-    order_side = "buy" if side in ("BUY", "ADD") else "sell"
-
-    if order_side == "buy":
-        order_size = f"{trade_amount:.8f}"
-    else:
-        order_size = f"{base_size:.8f}"
-
-    client_oid = str(uuid.uuid4()).replace("-", "")[:30]
-
-    try:
-        async with BitgetClient(
-            api_key=api_key,
-            api_secret=api_secret,
-            passphrase=passphrase,
-            testnet=settings.bitget_testnet,
-        ) as client:
-            result = await client.place_spot_market_order(
-                symbol=bitget_symbol,
-                side=order_side,
-                size=order_size,
-                client_oid=client_oid,
-            )
-    except BitgetError as exc:
-        logger.warning(
-            f"bitget.order.rejected user={cred.user_id} "
-            f"symbol={bitget_symbol} side={order_side} "
-            f"code={exc.code} msg={exc.msg}"
-        )
-        cred.last_error = f"{exc.code}: {exc.msg}"[:_MAX_ERROR_CHARS]
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Bitget rejected the order: {exc.msg}",
-        )
-    except Exception as exc:
-        logger.exception(
-            f"bitget.order.unreachable user={cred.user_id} "
-            f"symbol={bitget_symbol} side={order_side}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Could not reach Bitget: {type(exc).__name__}",
-        )
-
-    order_id = result.get("orderId") or result.get("order_id")
-    if not order_id:
-        logger.error(f"bitget.order.no_id user={cred.user_id} result={result}")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Bitget did not return an order ID.",
-        )
-
-    cred.last_used_at = datetime.utcnow()
-    cred.last_error = None
-    db.commit()
-
-    logger.info(
-        f"bitget.order.placed user={cred.user_id} "
-        f"symbol={bitget_symbol} side={order_side} size={order_size} "
-        f"order_id={order_id}"
-    )
-    return order_id
-
-
-async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = None):
-    """Execute a trade based on an AI signal. Writes to the `positions` table."""
-    from .models.ai_settings import AISettings
-
-    base_amount = 25.0
-    stop_loss_pct = 0.02
-    take_profit_pct = 0.04
-
-    db = SessionLocal()
-    try:
-        if user_id:
-            user_settings = db.query(AISettings).filter(
-                AISettings.user_id == user_id
-            ).first()
-            if user_settings:
-                base_amount = user_settings.trade_amount or 25.0
-                stop_loss_pct = (user_settings.stop_loss_percent or 2.0) / 100
-                take_profit_pct = (user_settings.take_profit_percent or 4.0) / 100
-
-        current_price = market_data_service.get_price(symbol)
-        if current_price == 0:
-            current_price = 45000.00
-
-        confidence = signal.get("confidence", 50)
-        trade_amount = ai_trading_service.calculate_trade_amount(base_amount, confidence)
-        size = trade_amount / current_price
-
-        cred = None
-        if user_id:
-            cred = (
-                db.query(ExchangeCredentials)
-                .filter(
-                    ExchangeCredentials.user_id == user_id,
-                    ExchangeCredentials.exchange == "bitget",
-                    ExchangeCredentials.is_active == True,  # noqa: E712
-                )
-                .first()
-            )
-        is_live = cred is not None
-
-        bitget_order_id = None
-        if is_live:
-            bitget_order_id = await _place_bitget_order(
-                cred=cred,
-                db=db,
-                symbol=symbol,
-                side=side,
-                trade_amount=trade_amount,
-                base_size=size,
-            )
-
-        source = "bitget" if is_live else "demo"
-
-        if side == "ADD":
-            open_positions = list_positions(db, user_id=user_id, status="OPEN")
-            existing = next((p for p in open_positions if p["symbol"] == symbol), None)
-
-            if existing:
-                old_size = float(existing.get("size") or 0)
-                old_price = float(existing.get("entryPrice") or 0)
-                new_size = old_size + size
-                if new_size > 0:
-                    avg_price = (old_size * old_price + size * current_price) / new_size
-                else:
-                    avg_price = current_price
-
-                updated = update_position(db, existing["id"], {
-                    "size": round(new_size, 6),
-                    "entryPrice": round(avg_price, 2),
-                    "currentPrice": current_price,
-                    "tradeAmount": (existing.get("tradeAmount") or 0) + trade_amount,
-                    "stopLoss": round(avg_price * (1 - stop_loss_pct), 2),
-                    "takeProfit": round(avg_price * (1 + take_profit_pct), 2),
-                    "bitgetOrderId": bitget_order_id,
-                    "source": source,
-                })
-
-                logger.info(
-                    f"💰 DCA ADD: {symbol} | source={source} | "
-                    f"Old {old_size:.6f}@{old_price:.2f} + "
-                    f"New {size:.6f}@{current_price:.2f} = "
-                    f"Avg {new_size:.6f}@{avg_price:.2f}"
-                    + (f" | bitget_order={bitget_order_id}" if bitget_order_id else "")
-                )
-                await telegram_service.send_trade_alert(updated, "ADD")
-                return updated
-
-            side = "BUY"
-
-        position = create_position(db, {
-            "id": str(uuid.uuid4()),
-            "user_id": user_id,
-            "symbol": symbol,
-            "side": side,
-            "size": round(size, 6),
-            "entryPrice": current_price,
-            "currentPrice": current_price,
-            "unrealizedPnl": 0.00,
-            "realizedPnl": 0.00,
-            "tradeAmount": trade_amount,
-            "baseAmount": base_amount,
-            "stopLoss": round(current_price * (1 - stop_loss_pct), 2),
-            "takeProfit": round(current_price * (1 + take_profit_pct), 2),
-            "stopLossPct": stop_loss_pct,
-            "takeProfitPct": take_profit_pct,
-            "openedAt": datetime.utcnow().isoformat(),
-            "status": "OPEN",
-            "aiConfidence": confidence,
-            "aiReasoning": signal.get("reasoning", "AI signal"),
-            "bitgetOrderId": bitget_order_id,
-            "source": source,
-        })
-
-        logger.info(
-            f"🤖 AI Trade: {side} {symbol} | source={source} | "
-            f"Base ${base_amount} × {confidence}% = ${trade_amount} | "
-            f"Size {size:.6f}"
-            + (f" | bitget_order={bitget_order_id}" if bitget_order_id else "")
-        )
-
-        await telegram_service.send_trade_alert(position, "OPEN")
-        return position
-    finally:
-        db.close()
+# The trade executor (place_bitget_order / execute_ai_trade) lives in
+# services.trade_executor so this file and services.auto_trader can share
+# the logic without a circular import.
 
 @app.post("/api/v1/ai/auto-trade")
 async def auto_trade(
@@ -1400,7 +1197,6 @@ async def auto_trade(
 
     user_positions = list_positions(db, user_id=current_user.id, status="OPEN")
 
-    # 🔥 FIX: Analyze the symbols the user actually selected, not a hardcoded list.
     symbols_to_analyze = user_symbols if user_symbols else ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
     signals = {}
     for sym in symbols_to_analyze:
@@ -1493,32 +1289,17 @@ async def get_performance():
     """Get AI performance stats"""
     return position_monitor.get_performance_stats()
 
-# ============================================
-# MANUAL TRADING (LIVE) — Task #5
-# ============================================
-# Places a real Bitget spot market order from the Trading panel.
-# Market orders only for now — limit orders need unfilled-order tracking.
 
+# ============================================
+# MANUAL TRADING (LIVE)
+# ============================================
 @app.post("/api/v1/trading/manual-order")
 async def place_manual_order(
     request: dict,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    Place a live manual order via the Trading panel.
-
-    Body:
-        symbol (str): e.g. "BTC/USDT"
-        side   (str): "BUY" or "SELL"
-        size   (float): For BUY, base asset quantity (e.g. 0.001 BTC).
-                        For SELL, base asset quantity to sell.
-        type   (str, optional): "MARKET" (default). LIMIT is rejected.
-        stopLoss (float, optional): absolute price
-        takeProfit (float, optional): absolute price
-
-    Requires an active Bitget connection.
-    """
+    """Place a live manual order via the Trading panel."""
     from .models.ai_settings import AISettings
 
     symbol = request.get("symbol", "BTC/USDT")
@@ -1528,7 +1309,6 @@ async def place_manual_order(
     stop_loss_raw = request.get("stopLoss")
     take_profit_raw = request.get("takeProfit")
 
-    # --- validate ---
     if side not in ("BUY", "SELL"):
         raise HTTPException(status_code=400, detail="Side must be BUY or SELL")
     try:
@@ -1543,7 +1323,6 @@ async def place_manual_order(
             detail="Live mode currently supports MARKET orders only.",
         )
 
-    # --- require Bitget connection ---
     cred = (
         db.query(ExchangeCredentials)
         .filter(
@@ -1559,7 +1338,6 @@ async def place_manual_order(
             detail="No active Bitget connection. Connect one in Settings → API Keys.",
         )
 
-    # --- current price ---
     current_price = market_data_service.get_price(symbol)
     if current_price == 0:
         raise HTTPException(
@@ -1567,15 +1345,13 @@ async def place_manual_order(
             detail=f"Could not fetch a live price for {symbol}. Try again in a moment.",
         )
 
-    # --- compute order-side sizes ---
     if side == "BUY":
-        trade_amount = size * current_price   # USDT to spend
-        base_size = size                       # base to buy
+        trade_amount = size * current_price
+        base_size = size
     else:
-        trade_amount = 0.0                     # unused on sell
-        base_size = size                       # base to sell
+        trade_amount = 0.0
+        base_size = size
 
-    # --- place the real order FIRST ---
     bitget_order_id = await _place_bitget_order(
         cred=cred,
         db=db,
@@ -1585,8 +1361,6 @@ async def place_manual_order(
         base_size=base_size,
     )
 
-    # --- SL/TP: prefer explicit absolute prices from the request; else
-    #     fall back to the user's AI settings percentages ---
     user_settings = (
         db.query(AISettings).filter(AISettings.user_id == current_user.id).first()
     )
@@ -1607,13 +1381,11 @@ async def place_manual_order(
     except (TypeError, ValueError):
         pass
 
-    # --- position row ---
     if side == "BUY":
         sl_price = round(current_price * (1 - stop_loss_pct), 8)
         tp_price = round(current_price * (1 + take_profit_pct), 8)
         notional = round(size * current_price, 8)
     else:
-        # SELL position: SL above entry, TP below entry
         sl_price = round(current_price * (1 + stop_loss_pct), 8)
         tp_price = round(current_price * (1 - take_profit_pct), 8)
         notional = round(size * current_price, 8)
@@ -1636,7 +1408,7 @@ async def place_manual_order(
         "takeProfitPct": take_profit_pct,
         "openedAt": datetime.utcnow().isoformat(),
         "status": "OPEN",
-        "aiConfidence": 100,   # manual trades: 100% user intent
+        "aiConfidence": 100,
         "aiReasoning": "Manual order via Trading panel",
         "bitgetOrderId": bitget_order_id,
         "source": "bitget",
@@ -1747,7 +1519,7 @@ async def root():
 
 @app.on_event("startup")
 async def startup_event():
-    """Start market data service + reconciliation on startup"""
+    """Start market data service + reconciliation + auto-trader on startup"""
     logger.info("🚀 Starting JADOTA AI API...")
     
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -1777,16 +1549,19 @@ async def startup_event():
     logger.info("✅ Position Monitor started")
 
     await reconciliation_service.start()
+
+    await auto_trader.start()
     
     logger.info("✅ JADOTA AI API started successfully")
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Stop market data service + reconciliation on shutdown"""
+    """Stop market data service + reconciliation + auto-trader on shutdown"""
     logger.info("🛑 Shutting down JADOTA AI API...")
     await market_data_service.stop()
     await position_monitor.stop()
     await reconciliation_service.stop()
+    await auto_trader.stop()
     logger.info("JADOTA AI API shut down")
 
 if __name__ == "__main__":

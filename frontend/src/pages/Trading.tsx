@@ -9,6 +9,8 @@ import { Link } from 'react-router-dom';
 import { Info, Shield, Sparkles, TrendingUp, TrendingDown, Loader2 } from 'lucide-react';
 import PositionSourceBadge from '@/components/PositionSourceBadge';
 
+const MODE_STORAGE_KEY = 'jadota-trading-mode';
+
 const Trading: React.FC = () => {
   const { user } = useAuthStore();
   const {
@@ -25,7 +27,14 @@ const Trading: React.FC = () => {
     isSubmitting,
   } = useTradingStore();
 
-  const [tradingMode, setTradingMode] = useState<'demo' | 'live'>('demo');
+  // 🔥 Persist trading mode across page refreshes.
+  const [tradingMode, setTradingMode] = useState<'demo' | 'live'>(() => {
+    if (typeof window === 'undefined') return 'demo';
+    return window.localStorage.getItem(MODE_STORAGE_KEY) === 'live'
+      ? 'live'
+      : 'demo';
+  });
+
   const [symbol, setSymbol] = useState('BTC/USDT');
   const [side, setSide] = useState<'BUY' | 'SELL'>('BUY');
   const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('MARKET');
@@ -34,7 +43,6 @@ const Trading: React.FC = () => {
   const [stopLoss, setStopLoss] = useState<number | undefined>(undefined);
   const [takeProfit, setTakeProfit] = useState<number | undefined>(undefined);
 
-  // Bitget connection state
   const [bitgetStatus, setBitgetStatus] = useState<BitgetStatus | null>(null);
   const [liveUsdt, setLiveUsdt] = useState<number | null>(null);
   const [isLiveSubmitting, setIsLiveSubmitting] = useState(false);
@@ -42,7 +50,6 @@ const Trading: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // ---- LIVE path ----
     if (tradingMode === 'live') {
       if (!bitgetStatus?.connected) {
         toast.error('Connect your Bitget account in Settings → API Keys first');
@@ -78,7 +85,6 @@ const Trading: React.FC = () => {
       return;
     }
 
-    // ---- DEMO path (unchanged) ----
     const currentBalance = demoBalance?.available || user?.demoBalance || 0;
     const estimatedCost = size * 45000;
     if (currentBalance < estimatedCost) {
@@ -115,7 +121,6 @@ const Trading: React.FC = () => {
       const status = await exchangeApi.getBitgetStatus();
       setBitgetStatus(status);
     } catch (error) {
-      // Not fatal — user just sees Live as unavailable
       setBitgetStatus({ connected: false, exchange: 'bitget' });
     }
   };
@@ -126,7 +131,6 @@ const Trading: React.FC = () => {
       const usdt = data.balances.find((b) => b.asset.toUpperCase() === 'USDT');
       setLiveUsdt(usdt?.free ?? 0);
     } catch (error: any) {
-      // Silent — the info card will just show N/A
       setLiveUsdt(null);
     }
   };
@@ -146,7 +150,26 @@ const Trading: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // When user switches to live mode, refresh the balance
+  // 🔥 Persist mode whenever it changes
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(MODE_STORAGE_KEY, tradingMode);
+    } catch { /* localStorage unavailable — no-op */ }
+  }, [tradingMode]);
+
+  // 🔥 If Bitget disconnects while user is on 'live', force back to 'demo'
+  useEffect(() => {
+    if (
+      tradingMode === 'live' &&
+      bitgetStatus !== null &&
+      bitgetStatus?.exchange &&
+      !bitgetStatus.connected
+    ) {
+      setTradingMode('demo');
+      toast.error('Bitget disconnected — switched back to Demo mode');
+    }
+  }, [bitgetStatus, tradingMode]);
+
   useEffect(() => {
     if (tradingMode === 'live' && bitgetStatus?.connected) {
       loadLiveBalance();
@@ -158,13 +181,8 @@ const Trading: React.FC = () => {
   const isBitgetConnected = !!bitgetStatus?.connected;
   const isLive = tradingMode === 'live';
 
-  // Effective balance in the info sidebar
   const displayBalance = isLive
-    ? {
-        total: liveUsdt ?? 0,
-        available: liveUsdt ?? 0,
-        locked: 0,
-      }
+    ? { total: liveUsdt ?? 0, available: liveUsdt ?? 0, locked: 0 }
     : {
         total: demoBalance?.total || user?.demoBalance || 0,
         available: demoBalance?.available || user?.demoBalance || 0,
@@ -173,7 +191,6 @@ const Trading: React.FC = () => {
 
   return (
     <div className="grid grid-cols-1 gap-6 p-6 mx-auto lg:grid-cols-3 max-w-7xl">
-      {/* Left Column */}
       <div className="space-y-6 lg:col-span-2">
         {/* Live Market Prices */}
         <div className="bg-[#1a1a2e] rounded-xl p-4 border border-[#2a2a4a]">
@@ -210,9 +227,7 @@ const Trading: React.FC = () => {
                 type="button"
                 onClick={() => setTradingMode('demo')}
                 className={`px-4 py-1.5 rounded-lg text-sm font-medium transition ${
-                  tradingMode === 'demo'
-                    ? 'bg-[#6366f1] text-white'
-                    : 'text-gray-400 hover:text-white'
+                  tradingMode === 'demo' ? 'bg-[#6366f1] text-white' : 'text-gray-400 hover:text-white'
                 }`}
               >
                 📊 Demo
@@ -244,14 +259,11 @@ const Trading: React.FC = () => {
             </div>
           </div>
 
-          {/* Mode banner */}
           {isLive ? (
             <div className="p-3 mb-4 text-sm text-red-400 border rounded-lg bg-red-500/10 border-red-500/30">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-4 h-4" />
-                <span className="font-medium">
-                  🔴 Live Mode — Real money will be spent from your Bitget spot balance
-                </span>
+                <span className="font-medium">🔴 Live Mode — Real money will be spent from your Bitget spot balance</span>
               </div>
               <div className="mt-1 text-xs text-red-300/80">
                 Orders are placed immediately at market price. No confirmation dialog.
@@ -273,9 +285,7 @@ const Trading: React.FC = () => {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block mb-1 text-sm font-medium text-gray-400">
-                Symbol
-              </label>
+              <label className="block mb-1 text-sm font-medium text-gray-400">Symbol</label>
               <select
                 value={symbol}
                 onChange={(e) => setSymbol(e.target.value)}
@@ -295,9 +305,7 @@ const Trading: React.FC = () => {
                 type="button"
                 onClick={() => setSide('BUY')}
                 className={`py-3 rounded-lg font-semibold transition ${
-                  side === 'BUY'
-                    ? 'bg-green-500 text-white'
-                    : 'bg-[#0a0a1a] text-gray-400 hover:bg-[#2a2a4a]'
+                  side === 'BUY' ? 'bg-green-500 text-white' : 'bg-[#0a0a1a] text-gray-400 hover:bg-[#2a2a4a]'
                 }`}
               >
                 BUY
@@ -306,9 +314,7 @@ const Trading: React.FC = () => {
                 type="button"
                 onClick={() => setSide('SELL')}
                 className={`py-3 rounded-lg font-semibold transition ${
-                  side === 'SELL'
-                    ? 'bg-red-500 text-white'
-                    : 'bg-[#0a0a1a] text-gray-400 hover:bg-[#2a2a4a]'
+                  side === 'SELL' ? 'bg-red-500 text-white' : 'bg-[#0a0a1a] text-gray-400 hover:bg-[#2a2a4a]'
                 }`}
               >
                 SELL
@@ -320,9 +326,7 @@ const Trading: React.FC = () => {
                 type="button"
                 onClick={() => setOrderType('MARKET')}
                 className={`py-2 rounded-lg text-sm transition ${
-                  orderType === 'MARKET'
-                    ? 'bg-[#6366f1] text-white'
-                    : 'bg-[#0a0a1a] text-gray-400 hover:bg-[#2a2a4a]'
+                  orderType === 'MARKET' ? 'bg-[#6366f1] text-white' : 'bg-[#0a0a1a] text-gray-400 hover:bg-[#2a2a4a]'
                 }`}
               >
                 Market
@@ -333,9 +337,7 @@ const Trading: React.FC = () => {
                 disabled={isLive}
                 title={isLive ? 'Limit orders coming soon in live mode' : ''}
                 className={`py-2 rounded-lg text-sm transition ${
-                  orderType === 'LIMIT'
-                    ? 'bg-[#6366f1] text-white'
-                    : 'bg-[#0a0a1a] text-gray-400 hover:bg-[#2a2a4a]'
+                  orderType === 'LIMIT' ? 'bg-[#6366f1] text-white' : 'bg-[#0a0a1a] text-gray-400 hover:bg-[#2a2a4a]'
                 } ${isLive ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
                 Limit {isLive && <span className="text-[10px] text-yellow-400">(soon)</span>}
@@ -363,9 +365,7 @@ const Trading: React.FC = () => {
 
             {orderType === 'LIMIT' && !isLive && (
               <div>
-                <label className="block mb-1 text-sm font-medium text-gray-400">
-                  Limit Price
-                </label>
+                <label className="block mb-1 text-sm font-medium text-gray-400">Limit Price</label>
                 <input
                   type="number"
                   value={price || ''}
@@ -378,9 +378,7 @@ const Trading: React.FC = () => {
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block mb-1 text-sm font-medium text-gray-400">
-                  Stop Loss
-                </label>
+                <label className="block mb-1 text-sm font-medium text-gray-400">Stop Loss</label>
                 <input
                   type="number"
                   value={stopLoss || ''}
@@ -391,9 +389,7 @@ const Trading: React.FC = () => {
                 />
               </div>
               <div>
-                <label className="block mb-1 text-sm font-medium text-gray-400">
-                  Take Profit
-                </label>
+                <label className="block mb-1 text-sm font-medium text-gray-400">Take Profit</label>
                 <input
                   type="number"
                   value={takeProfit || ''}
@@ -407,9 +403,7 @@ const Trading: React.FC = () => {
 
             <div className="flex justify-between text-sm text-gray-400 bg-[#0a0a1a] p-3 rounded-lg">
               <span>{isLive ? 'Bitget USDT Balance:' : 'Available Demo Balance:'}</span>
-              <span className="font-medium text-white">
-                ${displayBalance.available.toFixed(2)}
-              </span>
+              <span className="font-medium text-white">${displayBalance.available.toFixed(2)}</span>
             </div>
 
             <button
@@ -435,20 +429,14 @@ const Trading: React.FC = () => {
         <div className="bg-[#1a1a2e] rounded-xl p-6 border border-[#2a2a4a]">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-white">Open Positions</h3>
-            <span className="text-sm text-gray-400">
-              {openPositions.length} positions
-            </span>
+            <span className="text-sm text-gray-400">{openPositions.length} positions</span>
           </div>
           {openPositions.length === 0 ? (
             <p className="text-sm text-gray-400">No open positions</p>
           ) : (
             <div className="space-y-3">
               {openPositions.map((position) => (
-                <PositionCard
-                  key={position.id}
-                  position={position}
-                  onClose={closePosition}
-                />
+                <PositionCard key={position.id} position={position} onClose={closePosition} />
               ))}
             </div>
           )}
@@ -468,21 +456,15 @@ const Trading: React.FC = () => {
             </div>
             <div className="flex justify-between">
               <span className="text-gray-400">Available</span>
-              <span className="font-medium text-white">
-                ${displayBalance.available.toFixed(2)}
-              </span>
+              <span className="font-medium text-white">${displayBalance.available.toFixed(2)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-400">Locked</span>
-              <span className="font-medium text-white">
-                ${displayBalance.locked.toFixed(2)}
-              </span>
+              <span className="font-medium text-white">${displayBalance.locked.toFixed(2)}</span>
             </div>
             <div className="flex justify-between border-t border-[#2a2a4a] pt-3">
               <span className="text-gray-400">Total</span>
-              <span className="font-bold text-white">
-                ${displayBalance.total.toFixed(2)}
-              </span>
+              <span className="font-bold text-white">${displayBalance.total.toFixed(2)}</span>
             </div>
           </div>
         </div>
@@ -503,9 +485,7 @@ const Trading: React.FC = () => {
           </div>
           <div
             className={`p-3 mt-4 border rounded-lg ${
-              isLive
-                ? 'bg-red-500/10 border-red-500/30'
-                : 'bg-yellow-500/10 border-yellow-500/30'
+              isLive ? 'bg-red-500/10 border-red-500/30' : 'bg-yellow-500/10 border-yellow-500/30'
             }`}
           >
             <p
@@ -537,12 +517,8 @@ const PositionCard: React.FC<{
         <p className={`text-sm ${position.side === 'LONG' || position.side === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
           {position.side} × {position.size}
         </p>
-        <p className="text-xs text-gray-400">
-          Entry: ${position.entryPrice?.toFixed(2) || '0.00'}
-        </p>
-        <p className="text-xs text-gray-500">
-          Current: ${position.currentPrice?.toFixed(2) || '0.00'}
-        </p>
+        <p className="text-xs text-gray-400">Entry: ${position.entryPrice?.toFixed(2) || '0.00'}</p>
+        <p className="text-xs text-gray-500">Current: ${position.currentPrice?.toFixed(2) || '0.00'}</p>
       </div>
       <div className="text-right">
         <p className={`font-bold ${position.unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
