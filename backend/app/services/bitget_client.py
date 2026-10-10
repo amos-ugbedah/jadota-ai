@@ -125,12 +125,27 @@ class BitgetClient:
 
         return data.get("data")
 
+    # ============================================
+    # Endpoints
+    # ============================================
     async def get_account_info(self) -> Any:
         return await self._request("GET", "/api/v2/account/all-account-balance")
 
     async def get_open_orders(self, symbol: Optional[str] = None) -> Any:
         params = {"symbol": symbol} if symbol else None
         return await self._request("GET", "/api/v2/spot/trade/unfilled-orders", params=params)
+
+    # 🔥 Task #4b: fetch a single order's details (used by reconciliation)
+    async def get_order_detail(self, order_id: str, symbol: str) -> Dict[str, Any]:
+        """
+        Fetch a single spot order's details by ID.
+
+        Both `orderId` and `symbol` are required by Bitget. The returned
+        dict includes `status` ("live" | "filled" | "cancelled" | etc.)
+        and `priceAvg` / `fillPrice` when applicable.
+        """
+        params = {"orderId": order_id, "symbol": symbol}
+        return await self._request("GET", "/api/v2/spot/trade/orderInfo", params=params)
 
     async def place_spot_market_order(
         self,
@@ -156,15 +171,10 @@ class BitgetClient:
 
         Returns a normalized list:
             [{"asset": "USDT", "free": 1000.0, "used": 0.0, "total": 1000.0}, ...]
-
-        `used` is frozen + locked. `total` = free + used.
-        If `coin` is given, returns only that asset.
         """
         params = {"coin": coin} if coin else None
         data = await self._request("GET", "/api/v2/spot/account/assets", params=params)
 
-        # Bitget returns either a list of assets or a single dict depending
-        # on whether `coin` was filtered. Normalize both shapes.
         if isinstance(data, dict):
             rows = [data]
         elif isinstance(data, list):

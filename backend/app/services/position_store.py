@@ -2,9 +2,9 @@
 Persistent position store.
 
 Positions live in the `positions` Postgres table. All API consumers
-(main.py, analytics.py, position_monitor.py) go through these helpers,
-which convert between the DB rows and the camelCase dicts the API
-and frontend use.
+(main.py, analytics.py, position_monitor.py, reconciliation.py) go
+through these helpers, which convert between the DB rows and the
+camelCase dicts the API and frontend use.
 
 Public API (first arg is always a SQLAlchemy Session):
     list_positions(db, user_id=None, status=None, limit=None) -> List[Dict]
@@ -52,6 +52,9 @@ def row_to_dict(row: Position) -> Dict[str, Any]:
         # 🔥 Task #4a-2
         "bitgetOrderId": row.bitget_order_id,
         "source": row.source,
+        # 🔥 Task #4b
+        "reconciliationStatus": row.reconciliation_status,
+        "lastReconciledAt": row.last_reconciled_at.isoformat() if row.last_reconciled_at else None,
         "createdAt": row.created_at.isoformat() if row.created_at else None,
         "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -127,6 +130,9 @@ def create_position(db: Session, data: Dict[str, Any]) -> Dict[str, Any]:
         # 🔥 Task #4a-2
         bitget_order_id=data.get("bitgetOrderId"),
         source=data.get("source", "demo"),
+        # 🔥 Task #4b
+        reconciliation_status=data.get("reconciliationStatus"),
+        last_reconciled_at=_parse_dt(data.get("lastReconciledAt")),
     )
     db.add(row)
     db.commit()
@@ -155,6 +161,8 @@ _CAMEL_TO_SNAKE = {
     # 🔥 Task #4a-2
     "bitgetOrderId": "bitget_order_id",
     "source": "source",
+    # 🔥 Task #4b
+    "reconciliationStatus": "reconciliation_status",
 }
 
 
@@ -172,6 +180,10 @@ def update_position(
             continue
         if key == "openedAt":
             row.opened_at = _parse_dt(value)
+            continue
+        # 🔥 Task #4b — timestamp handled specially
+        if key == "lastReconciledAt":
+            row.last_reconciled_at = _parse_dt(value)
             continue
         col = _CAMEL_TO_SNAKE.get(key)
         if col:

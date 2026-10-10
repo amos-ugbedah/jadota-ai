@@ -48,6 +48,8 @@ from .services.position_store import (
 # 🔥 Task #4a-2: live order routing helpers
 from .services.encryption import decrypt
 from .services.bitget_client import BitgetClient, BitgetError
+# 🔥 Task #4b: reconciliation service
+from .services.reconciliation import reconciliation_service
 from .api.v1 import ai_settings
 # 🔥 Analytics router
 from .api.v1 import analytics
@@ -119,7 +121,7 @@ def _run_startup_migrations():
         "completed_at": "TIMESTAMP",
     }
 
-    # 🔥 Task #3 + Task #4a-2: Expected columns for positions
+    # 🔥 Task #3 + #4a-2 + #4b: Expected columns for positions
     expected_positions = {
         "user_id": "VARCHAR(36)",
         "symbol": "VARCHAR(20)",
@@ -146,6 +148,9 @@ def _run_startup_migrations():
         # 🔥 Task #4a-2 — Bitget linkage
         "bitget_order_id": "VARCHAR(100)",
         "source": "VARCHAR(20) DEFAULT 'demo'",
+        # 🔥 Task #4b — reconciliation metadata
+        "reconciliation_status": "VARCHAR(20)",
+        "last_reconciled_at": "TIMESTAMP",
     }
 
     # 🔥 Task #4a-1: Expected columns for exchange_credentials
@@ -204,7 +209,7 @@ def _run_startup_migrations():
                 else:
                     logger.info("✅ payments schema is up to date")
 
-            # ---------- positions (Task #3 + #4a-2) ----------
+            # ---------- positions (Task #3 + #4a-2 + #4b) ----------
             if "positions" in tables:
                 actual = {c["name"] for c in inspector.get_columns("positions")}
                 missing = {k: v for k, v in expected_positions.items() if k not in actual}
@@ -738,8 +743,6 @@ async def verify_email(token: str, db: Session = Depends(get_db)):
 # ============================================
 # ADMIN ENDPOINTS
 # ============================================
-# 🔥 FIX (Task #1): All 7 admin endpoints below now require
-# an authenticated user with role ADMIN or SUPER_ADMIN.
 
 @app.get("/api/v1/admin/users", dependencies=[Depends(get_admin_user)])
 async def get_admin_users(db: Session = Depends(get_db)):
@@ -862,6 +865,13 @@ async def get_ai_status():
         "lastRun": datetime.utcnow().isoformat(),
         "tradesToday": 0
     }
+
+# 🔥 Task #4b: manual reconciliation trigger (admin only)
+@app.post("/api/v1/admin/reconcile", dependencies=[Depends(get_admin_user)])
+async def admin_trigger_reconciliation():
+    """Manually trigger a reconciliation pass. (admin only)"""
+    summary = await reconciliation_service.run_once()
+    return {"success": True, **summary}
 
 # ============================================
 # SUBSCRIPTION ENDPOINTS
@@ -1206,13 +1216,11 @@ async def _place_bitget_order(
     bitget_symbol = symbol.replace("/", "")
     order_side = "buy" if side in ("BUY", "ADD") else "sell"
 
-    # Bitget expects: buy → quote amount; sell → base amount
     if order_side == "buy":
         order_size = f"{trade_amount:.8f}"
     else:
         order_size = f"{base_size:.8f}"
 
-    # Idempotency token — reused if the caller ever retries the same logical order
     client_oid = str(uuid.uuid4()).replace("-", "")[:30]
 
     try:
@@ -1240,7 +1248,7 @@ async def _place_bitget_order(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Bitget rejected the order: {exc.msg}",
         )
-    except Exception as exc:  # network, timeout, DNS
+    except Exception as exc:
         logger.exception(
             f"bitget.order.unreachable user={cred.user_id} "
             f"symbol={bitget_symbol} side={order_side}"
@@ -1258,7 +1266,6 @@ async def _place_bitget_order(
             detail="Bitget did not return an order ID.",
         )
 
-    # Record successful use
     cred.last_used_at = datetime.utcnow()
     cred.last_error = None
     db.commit()
@@ -1281,10 +1288,6 @@ async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = 
         is raised and no position row is created.
       - If the user has no Bitget connection, behavior is unchanged:
         a demo-only position is written (source="demo").
-
-    Supported sides: BUY, SELL, ADD.
-      - BUY / SELL create a new position
-      - ADD merges into the user's existing OPEN position for that symbol
     """
     from .models.ai_settings import AISettings
 
@@ -1294,7 +1297,6 @@ async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = 
 
     db = SessionLocal()
     try:
-        # ---- 1. Load user's AI settings ----------------------------------
         if user_id:
             user_settings = db.query(AISettings).filter(
                 AISettings.user_id == user_id
@@ -1304,7 +1306,6 @@ async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = 
                 stop_loss_pct = (user_settings.stop_loss_percent or 2.0) / 100
                 take_profit_pct = (user_settings.take_profit_percent or 4.0) / 100
 
-        # ---- 2. Compute sizing from current market price -----------------
         current_price = market_data_service.get_price(symbol)
         if current_price == 0:
             current_price = 45000.00
@@ -1313,7 +1314,6 @@ async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = 
         trade_amount = ai_trading_service.calculate_trade_amount(base_amount, confidence)
         size = trade_amount / current_price
 
-        # ---- 3. Check for a live Bitget connection -----------------------
         cred = None
         if user_id:
             cred = (
@@ -1327,9 +1327,6 @@ async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = 
             )
         is_live = cred is not None
 
-        # ---- 4. Place the real order FIRST, if live ----------------------
-        # If this raises, no position is created — user never sees a
-        # phantom position that doesn't exist on Bitget.
         bitget_order_id = None
         if is_live:
             bitget_order_id = await _place_bitget_order(
@@ -1343,7 +1340,6 @@ async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = 
 
         source = "bitget" if is_live else "demo"
 
-        # ---- 5. ADD — merge into existing OPEN position ------------------
         if side == "ADD":
             open_positions = list_positions(db, user_id=user_id, status="OPEN")
             existing = next((p for p in open_positions if p["symbol"] == symbol), None)
@@ -1378,10 +1374,8 @@ async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = 
                 await telegram_service.send_trade_alert(updated, "ADD")
                 return updated
 
-            # No existing position — treat as BUY
             side = "BUY"
 
-        # ---- 6. Normal BUY / SELL — create new position ------------------
         position = create_position(db, {
             "id": str(uuid.uuid4()),
             "user_id": user_id,
@@ -1466,8 +1460,6 @@ async def auto_trade(
         sig = signal["signal"]
 
         if sig in ("BUY", "SELL", "ADD"):
-            # 🔥 Task #4a-2: isolate per-symbol failures so one rejected
-            # Bitget order does not abort the whole batch.
             try:
                 trade = await execute_ai_trade(symbol, sig, signal, current_user.id)
                 results.append(trade)
@@ -1632,7 +1624,7 @@ async def root():
 
 @app.on_event("startup")
 async def startup_event():
-    """Start market data service on startup"""
+    """Start market data service + reconciliation on startup"""
     logger.info("🚀 Starting JADOTA AI API...")
     
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -1660,15 +1652,20 @@ async def startup_event():
     
     await position_monitor.start(market_data_service)
     logger.info("✅ Position Monitor started")
+
+    # 🔥 Task #4b: start reconciliation service
+    await reconciliation_service.start()
     
     logger.info("✅ JADOTA AI API started successfully")
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Stop market data service on shutdown"""
+    """Stop market data service + reconciliation on shutdown"""
     logger.info("🛑 Shutting down JADOTA AI API...")
     await market_data_service.stop()
     await position_monitor.stop()
+    # 🔥 Task #4b
+    await reconciliation_service.stop()
     logger.info("JADOTA AI API shut down")
 
 if __name__ == "__main__":
