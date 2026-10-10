@@ -1094,29 +1094,47 @@ async def get_demo_balance(
 # `/analyze/{symbol}`, otherwise FastAPI matches "all" as a symbol value.
 
 @app.get("/api/v1/ai/analyze/all")
-async def ai_analyze_all():
-    """Get AI signals for all symbols (uses default strategy)"""
-    symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
+async def ai_analyze_all(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get AI signals for the symbols the current user has selected,
+    using the strategy they have configured. Mirrors exactly what
+    auto-trade would evaluate.
+    """
+    from .models.ai_settings import AISettings
+
+    settings = (
+        db.query(AISettings).filter(AISettings.user_id == current_user.id).first()
+    )
+
+    if settings:
+        symbols = settings.get_symbols_list() or ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
+        strategy_name = getattr(settings, "strategy_type", None) or "balanced"
+    else:
+        symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
+        strategy_name = "balanced"
+
+    # Pass the user's open positions so position-aware strategies (DCA) work
+    user_positions = list_positions(db, user_id=current_user.id, status="OPEN")
+
     results = {}
     for symbol in symbols:
-        result = await ai_trading_service.analyze_symbol(symbol)
-        results[symbol] = result
+        results[symbol] = await ai_trading_service.analyze_symbol(
+            symbol,
+            timeframe="1h",
+            strategy=strategy_name,
+            positions=user_positions,
+        )
     return results
 
 @app.get("/api/v1/ai/analyze/{symbol}")
 async def ai_analyze_symbol(symbol: str, timeframe: str = "1h"):
-    """Get AI trading signal for a symbol (uses default strategy)"""
+    """Get AI trading signal for a single symbol (uses default strategy)"""
     result = await ai_trading_service.analyze_symbol(symbol, timeframe)
     return result
 
-@app.get("/api/v1/ai/status")
-async def ai_status():
-    """Get AI engine status"""
-    return {
-        "status": "running",
-        "symbols_analyzed": len(ai_trading_service.signals),
-        "last_update": datetime.utcnow().isoformat()
-    }
 
 # ============================================
 # AUTO-TRADING + MANUAL-ORDER HELPERS
