@@ -51,6 +51,7 @@ from .services.bitget_client import BitgetClient, BitgetError
 # 🔥 Task #4b: reconciliation service
 from .services.reconciliation import reconciliation_service
 # 🔥 Trade executor (extracted so auto_trader can reuse it without circular imports)
+# 🔥 NOTE: These are THE ONLY definitions. Do NOT re-define them below.
 from .services.trade_executor import (
     place_bitget_order as _place_bitget_order,
     execute_ai_trade,
@@ -867,7 +868,6 @@ async def admin_trigger_reconciliation():
     summary = await reconciliation_service.run_once()
     return {"success": True, **summary}
 
-# 🔥 Auto-trader manual trigger (admin only)
 @app.post("/api/v1/admin/auto-trader/run", dependencies=[Depends(get_admin_user)])
 async def admin_trigger_auto_trader():
     """Manually trigger one auto-trader pass. (admin only)"""
@@ -998,7 +998,7 @@ async def get_ohlcv(symbol: str, interval: str = "1h", limit: int = 100):
     return []
 
 # ============================================
-# DEMO TRADING ENDPOINTS (Task #3: DB-backed)
+# DEMO TRADING ENDPOINTS
 # ============================================
 
 @app.post("/api/v1/demo/positions")
@@ -1165,8 +1165,8 @@ async def ai_status():
 # AUTO-TRADING ENDPOINT (manual trigger)
 # ============================================
 # The trade executor (place_bitget_order / execute_ai_trade) lives in
-# services.trade_executor so this file and services.auto_trader can share
-# the logic without a circular import.
+# services.trade_executor — imported at the top of this file. Do NOT
+# redefine them here or the import will be shadowed.
 
 @app.post("/api/v1/ai/auto-trade")
 async def auto_trade(
@@ -1470,9 +1470,6 @@ async def test_telegram():
 # ============================================
 # TRADING ENDPOINTS — now backed by the DB
 # ============================================
-# Previously these were stubs returning []. The Trading page and Positions
-# page both call /api/v1/trading/positions via the frontend's tradingStore,
-# so they MUST return real positions to reflect what's on Bitget.
 
 @app.get("/api/v1/trading/positions")
 async def get_positions(
