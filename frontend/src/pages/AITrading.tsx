@@ -22,7 +22,9 @@ const AITrading: React.FC = () => {
   const [isAutoTrading, setIsAutoTrading] = useState(false);
   const [portfolio, setPortfolio] = useState<any>(null);
 
-  const symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT'];
+  // 🔥 FIX: derive the symbol list from what the backend actually returned
+  // (which reflects the user's AI Settings), instead of a hardcoded array.
+  const symbols = Object.keys(signals);
 
   const fetchData = async () => {
     try {
@@ -196,26 +198,35 @@ const AITrading: React.FC = () => {
         </div>
       </div>
 
-      {/* Signals Grid */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {symbols.map((symbol) => {
-          const signal = signals[symbol];
-          const price = marketPrices.find(p => p.symbol === symbol);
-          
-          if (!signal) return null;
-          
-          return (
-            <SignalCard
-              key={symbol}
-              symbol={symbol}
-              signal={signal}
-              price={price}
-              onSelect={() => setSelectedSymbol(symbol)}
-              isSelected={selectedSymbol === symbol}
-            />
-          );
-        })}
-      </div>
+      {/* Signals Grid — shows only symbols returned by the backend */}
+      {symbols.length === 0 ? (
+        <div className="bg-[#1a1a2e] rounded-xl p-8 border border-[#2a2a4a] text-center">
+          <p className="text-gray-400">No signals available yet.</p>
+          <p className="mt-2 text-sm text-gray-500">
+            Configure symbols in AI Settings, then wait for the next refresh.
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {symbols.map((symbol) => {
+            const signal = signals[symbol];
+            const price = marketPrices.find(p => p.symbol === symbol);
+            
+            if (!signal) return null;
+            
+            return (
+              <SignalCard
+                key={symbol}
+                symbol={symbol}
+                signal={signal}
+                price={price}
+                onSelect={() => setSelectedSymbol(symbol)}
+                isSelected={selectedSymbol === symbol}
+              />
+            );
+          })}
+        </div>
+      )}
 
       {/* Portfolio Section */}
       {(hasPositions || portfolio?.total_value > 0) && (
