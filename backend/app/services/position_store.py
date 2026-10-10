@@ -49,6 +49,9 @@ def row_to_dict(row: Position) -> Dict[str, Any]:
         "closeReason": row.close_reason,
         "openedAt": row.opened_at.isoformat() if row.opened_at else None,
         "closedAt": row.closed_at.isoformat() if row.closed_at else None,
+        # 🔥 Task #4a-2
+        "bitgetOrderId": row.bitget_order_id,
+        "source": row.source,
         "createdAt": row.created_at.isoformat() if row.created_at else None,
         "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -121,6 +124,9 @@ def create_position(db: Session, data: Dict[str, Any]) -> Dict[str, Any]:
         status=data.get("status", "OPEN"),
         close_reason=data.get("closeReason"),
         opened_at=_parse_dt(data.get("openedAt")) or datetime.utcnow(),
+        # 🔥 Task #4a-2
+        bitget_order_id=data.get("bitgetOrderId"),
+        source=data.get("source", "demo"),
     )
     db.add(row)
     db.commit()
@@ -146,6 +152,9 @@ _CAMEL_TO_SNAKE = {
     "size": "size",
     "symbol": "symbol",
     "side": "side",
+    # 🔥 Task #4a-2
+    "bitgetOrderId": "bitget_order_id",
+    "source": "source",
 }
 
 
@@ -204,7 +213,4 @@ def close_position(
 # ============================================
 # Backwards-compat shim
 # ============================================
-# Legacy code may still do `from ...position_store import positions`.
-# We keep an empty list so the import succeeds; nothing writes to it.
-# Callers should migrate to the DB-backed functions above.
 positions: list = []

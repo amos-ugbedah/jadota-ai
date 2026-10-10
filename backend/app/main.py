@@ -29,6 +29,8 @@ from .core.security import (
 from .models.user import User
 # 🔥 Task #3: ensure Position model is registered with Base before create_all()
 from .models.position import Position  # noqa: F401
+# 🔥 Task #4a-1: ensure ExchangeCredentials model is registered before create_all()
+from .models.exchange_credentials import ExchangeCredentials  # noqa: F401
 from .services.market_data_service import market_data_service
 from .services.ai_trading_service import ai_trading_service
 from .services.position_monitor import position_monitor
@@ -41,16 +43,24 @@ from .services.position_store import (
     update_position,
     close_position,
 )
+# 🔥 Task #4a-2: live order routing helpers
+from .services.encryption import decrypt
+from .services.bitget_client import BitgetClient, BitgetError
 from .api.v1 import ai_settings
 # 🔥 Analytics router
 from .api.v1 import analytics
 # 🔥 Payments router
 from .api.v1 import payments
+# 🔥 Task #4a-1: Exchange (Bitget) router
+from .api.v1 import exchange
 # 🔥 FIX (Task #1): admin-only dependency for locking down admin endpoints
 from .api.dependencies import get_admin_user
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Truncation limit for error strings stored on ExchangeCredentials
+_MAX_ERROR_CHARS = 500
 
 # ============================================
 # Database Setup
@@ -107,8 +117,7 @@ def _run_startup_migrations():
         "completed_at": "TIMESTAMP",
     }
 
-    # 🔥 Task #3: Expected columns for positions
-    # Extra columns on an older table are harmless; we only ADD what's missing.
+    # 🔥 Task #3 + Task #4a-2: Expected columns for positions
     expected_positions = {
         "user_id": "VARCHAR(36)",
         "symbol": "VARCHAR(20)",
@@ -130,6 +139,26 @@ def _run_startup_migrations():
         "close_reason": "VARCHAR(30)",
         "opened_at": "TIMESTAMP DEFAULT NOW()",
         "closed_at": "TIMESTAMP",
+        "created_at": "TIMESTAMP DEFAULT NOW()",
+        "updated_at": "TIMESTAMP",
+        # 🔥 Task #4a-2 — Bitget linkage
+        "bitget_order_id": "VARCHAR(100)",
+        "source": "VARCHAR(20) DEFAULT 'demo'",
+    }
+
+    # 🔥 Task #4a-1: Expected columns for exchange_credentials
+    expected_exchange_credentials = {
+        "user_id": "VARCHAR(36)",
+        "exchange": "VARCHAR(20) DEFAULT 'bitget'",
+        "api_key_encrypted": "TEXT",
+        "api_secret_encrypted": "TEXT",
+        "passphrase_encrypted": "TEXT",
+        "api_key_masked": "VARCHAR(50)",
+        "permissions": "VARCHAR(100)",
+        "ip_whitelist": "VARCHAR(200)",
+        "is_active": "BOOLEAN DEFAULT TRUE",
+        "last_used_at": "TIMESTAMP",
+        "last_error": "TEXT",
         "created_at": "TIMESTAMP DEFAULT NOW()",
         "updated_at": "TIMESTAMP",
     }
@@ -173,7 +202,7 @@ def _run_startup_migrations():
                 else:
                     logger.info("✅ payments schema is up to date")
 
-            # ---------- positions (Task #3) ----------
+            # ---------- positions (Task #3 + #4a-2) ----------
             if "positions" in tables:
                 actual = {c["name"] for c in inspector.get_columns("positions")}
                 missing = {k: v for k, v in expected_positions.items() if k not in actual}
@@ -189,6 +218,23 @@ def _run_startup_migrations():
                     logger.info("✅ positions migration complete")
                 else:
                     logger.info("✅ positions schema is up to date")
+
+            # ---------- exchange_credentials (Task #4a-1) ----------
+            if "exchange_credentials" in tables:
+                actual = {c["name"] for c in inspector.get_columns("exchange_credentials")}
+                missing = {k: v for k, v in expected_exchange_credentials.items() if k not in actual}
+                if missing:
+                    logger.info(f"🔧 exchange_credentials: adding {len(missing)} missing column(s)")
+                    for col, dtype in missing.items():
+                        try:
+                            conn.execute(_sql_text(f"ALTER TABLE exchange_credentials ADD COLUMN {col} {dtype}"))
+                            logger.info(f"   + exchange_credentials.{col}")
+                        except Exception as e:
+                            logger.warning(f"   ⚠️ Could not add exchange_credentials.{col}: {e}")
+                    conn.commit()
+                    logger.info("✅ exchange_credentials migration complete")
+                else:
+                    logger.info("✅ exchange_credentials schema is up to date")
 
     except Exception as e:
         logger.error(f"❌ Migration error: {e}")
@@ -861,15 +907,7 @@ async def get_market_symbols():
 
 @app.get("/api/v1/market/ohlcv/{symbol:path}")
 async def get_ohlcv(symbol: str, interval: str = "1h", limit: int = 100):
-    """
-    Get OHLCV data for a symbol.
-
-    🔥 FIX: Bitget v2 granularity values (per their API docs and error messages):
-           1min, 3min, 5min, 15min, 30min, 1h, 4h, 6h, 12h, 1day, 1week, 1M
-           (NOT 1m, 1H, 1D, 1W — those cause HTTP 400)
-    🔥 FIX: Uses {symbol:path} so "BTC/USDT" (with slash) works
-    🔥 FIX: Candles reversed to oldest-first (what charting libs expect)
-    """
+    """Get OHLCV data for a symbol."""
     interval_map = {
         "1m": "1min",
         "3m": "3min",
@@ -941,8 +979,6 @@ async def get_ohlcv(symbol: str, interval: str = "1h", limit: int = 100):
 # ============================================
 # DEMO TRADING ENDPOINTS (Task #3: DB-backed)
 # ============================================
-# All four endpoints are scoped to the authenticated user and write to
-# the `positions` table via services.position_store.
 
 @app.post("/api/v1/demo/positions")
 async def open_demo_position(
@@ -979,9 +1015,10 @@ async def open_demo_position(
         "status": "OPEN",
         "aiConfidence": request.get("aiConfidence", 0),
         "aiReasoning": request.get("aiReasoning", ""),
+        "source": "demo",
     })
 
-    logger.info(f"📈 Position OPENED for user {current_user.id[:8]}: {symbol} {side} @ ${current_price:.2f} | SL: ${position['stopLoss']:.2f} | TP: ${position['takeProfit']:.2f}")
+    logger.info(f"📈 Position OPENED for user {current_user.id[:8]}: {symbol} {side} @ ${current_price:.2f}")
     return position
 
 @app.get("/api/v1/demo/positions")
@@ -1033,7 +1070,7 @@ async def get_demo_balance(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Get demo balance for the current user, with only their positions counted"""
+    """Get demo balance for the current user"""
     total_balance = current_user.demo_balance if current_user.demo_balance is not None else 10000.00
     open_positions = list_positions(db, user_id=current_user.id, status="OPEN")
     locked = sum((p.get("entryPrice") or 0) * (p.get("size") or 0) for p in open_positions)
@@ -1058,11 +1095,9 @@ async def ai_analyze_all():
     """Get AI signals for all symbols (uses default strategy)"""
     symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
     results = {}
-    
     for symbol in symbols:
         result = await ai_trading_service.analyze_symbol(symbol)
         results[symbol] = result
-    
     return results
 
 @app.get("/api/v1/ai/status")
@@ -1075,17 +1110,121 @@ async def ai_status():
     }
 
 # ============================================
-# AUTO-TRADING ENDPOINTS WITH TELEGRAM (Task #3: DB-backed)
+# AUTO-TRADING ENDPOINTS (Task #3 + #4a-2)
 # ============================================
+
+async def _place_bitget_order(
+    cred: ExchangeCredentials,
+    db: Session,
+    symbol: str,
+    side: str,
+    trade_amount: float,
+    base_size: float,
+) -> str:
+    """
+    Place a spot market order on Bitget for a connected user.
+
+    Side handling — matches Bitget v2 spot semantics:
+      - BUY / ADD → order side "buy",  size is the QUOTE amount (USDT to spend)
+      - SELL      → order side "sell", size is the BASE amount (coins to sell)
+
+    Raises HTTPException on any failure — the caller must NOT create a
+    position row when this function raises.
+    """
+    api_key = decrypt(cred.api_key_encrypted)
+    api_secret = decrypt(cred.api_secret_encrypted)
+    passphrase = decrypt(cred.passphrase_encrypted)
+
+    if not (api_key and api_secret and passphrase):
+        logger.error(f"bitget.decrypt.failed user={cred.user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Stored Bitget credentials cannot be decrypted. "
+                   "Please disconnect and reconnect your Bitget account.",
+        )
+
+    bitget_symbol = symbol.replace("/", "")
+    order_side = "buy" if side in ("BUY", "ADD") else "sell"
+
+    # Bitget expects: buy → quote amount; sell → base amount
+    if order_side == "buy":
+        order_size = f"{trade_amount:.8f}"
+    else:
+        order_size = f"{base_size:.8f}"
+
+    # Idempotency token — reused if the caller ever retries the same logical order
+    client_oid = str(uuid.uuid4()).replace("-", "")[:30]
+
+    try:
+        async with BitgetClient(
+            api_key=api_key,
+            api_secret=api_secret,
+            passphrase=passphrase,
+            testnet=settings.bitget_testnet,
+        ) as client:
+            result = await client.place_spot_market_order(
+                symbol=bitget_symbol,
+                side=order_side,
+                size=order_size,
+                client_oid=client_oid,
+            )
+    except BitgetError as exc:
+        logger.warning(
+            f"bitget.order.rejected user={cred.user_id} "
+            f"symbol={bitget_symbol} side={order_side} "
+            f"code={exc.code} msg={exc.msg}"
+        )
+        cred.last_error = f"{exc.code}: {exc.msg}"[:_MAX_ERROR_CHARS]
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Bitget rejected the order: {exc.msg}",
+        )
+    except Exception as exc:  # network, timeout, DNS
+        logger.exception(
+            f"bitget.order.unreachable user={cred.user_id} "
+            f"symbol={bitget_symbol} side={order_side}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Could not reach Bitget: {type(exc).__name__}",
+        )
+
+    order_id = result.get("orderId") or result.get("order_id")
+    if not order_id:
+        logger.error(f"bitget.order.no_id user={cred.user_id} result={result}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Bitget did not return an order ID.",
+        )
+
+    # Record successful use
+    cred.last_used_at = datetime.utcnow()
+    cred.last_error = None
+    db.commit()
+
+    logger.info(
+        f"bitget.order.placed user={cred.user_id} "
+        f"symbol={bitget_symbol} side={order_side} size={order_size} "
+        f"order_id={order_id}"
+    )
+    return order_id
+
 
 async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = None):
     """
-    Execute a trade based on AI signal. Writes to the `positions` table.
+    Execute a trade based on an AI signal.
+
+    Task #4a-2 behavior:
+      - If the user has an active Bitget connection, the order is placed
+        on Bitget *before* any DB write. If Bitget rejects, HTTPException
+        is raised and no position row is created.
+      - If the user has no Bitget connection, behavior is unchanged:
+        a demo-only position is written (source="demo").
 
     Supported sides: BUY, SELL, ADD.
       - BUY / SELL create a new position
       - ADD merges into the user's existing OPEN position for that symbol
-        (average price, sum size) — used by the DCA Recovery strategy.
     """
     from .models.ai_settings import AISettings
 
@@ -1095,6 +1234,7 @@ async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = 
 
     db = SessionLocal()
     try:
+        # ---- 1. Load user's AI settings ----------------------------------
         if user_id:
             user_settings = db.query(AISettings).filter(
                 AISettings.user_id == user_id
@@ -1104,6 +1244,7 @@ async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = 
                 stop_loss_pct = (user_settings.stop_loss_percent or 2.0) / 100
                 take_profit_pct = (user_settings.take_profit_percent or 4.0) / 100
 
+        # ---- 2. Compute sizing from current market price -----------------
         current_price = market_data_service.get_price(symbol)
         if current_price == 0:
             current_price = 45000.00
@@ -1112,9 +1253,37 @@ async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = 
         trade_amount = ai_trading_service.calculate_trade_amount(base_amount, confidence)
         size = trade_amount / current_price
 
-        # ============================================
-        # ADD — merge into existing OPEN position
-        # ============================================
+        # ---- 3. Check for a live Bitget connection -----------------------
+        cred = None
+        if user_id:
+            cred = (
+                db.query(ExchangeCredentials)
+                .filter(
+                    ExchangeCredentials.user_id == user_id,
+                    ExchangeCredentials.exchange == "bitget",
+                    ExchangeCredentials.is_active == True,  # noqa: E712
+                )
+                .first()
+            )
+        is_live = cred is not None
+
+        # ---- 4. Place the real order FIRST, if live ----------------------
+        # If this raises, no position is created — user never sees a
+        # phantom position that doesn't exist on Bitget.
+        bitget_order_id = None
+        if is_live:
+            bitget_order_id = await _place_bitget_order(
+                cred=cred,
+                db=db,
+                symbol=symbol,
+                side=side,
+                trade_amount=trade_amount,
+                base_size=size,
+            )
+
+        source = "bitget" if is_live else "demo"
+
+        # ---- 5. ADD — merge into existing OPEN position ------------------
         if side == "ADD":
             open_positions = list_positions(db, user_id=user_id, status="OPEN")
             existing = next((p for p in open_positions if p["symbol"] == symbol), None)
@@ -1135,13 +1304,16 @@ async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = 
                     "tradeAmount": (existing.get("tradeAmount") or 0) + trade_amount,
                     "stopLoss": round(avg_price * (1 - stop_loss_pct), 2),
                     "takeProfit": round(avg_price * (1 + take_profit_pct), 2),
+                    "bitgetOrderId": bitget_order_id,
+                    "source": source,
                 })
 
                 logger.info(
-                    f"💰 DCA ADD: {symbol} | "
+                    f"💰 DCA ADD: {symbol} | source={source} | "
                     f"Old {old_size:.6f}@{old_price:.2f} + "
                     f"New {size:.6f}@{current_price:.2f} = "
                     f"Avg {new_size:.6f}@{avg_price:.2f}"
+                    + (f" | bitget_order={bitget_order_id}" if bitget_order_id else "")
                 )
                 await telegram_service.send_trade_alert(updated, "ADD")
                 return updated
@@ -1149,9 +1321,7 @@ async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = 
             # No existing position — treat as BUY
             side = "BUY"
 
-        # ============================================
-        # Normal BUY / SELL — create new position
-        # ============================================
+        # ---- 6. Normal BUY / SELL — create new position ------------------
         position = create_position(db, {
             "id": str(uuid.uuid4()),
             "user_id": user_id,
@@ -1172,12 +1342,15 @@ async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = 
             "status": "OPEN",
             "aiConfidence": confidence,
             "aiReasoning": signal.get("reasoning", "AI signal"),
+            "bitgetOrderId": bitget_order_id,
+            "source": source,
         })
 
         logger.info(
-            f"🤖 AI Trade: {side} {symbol} | "
+            f"🤖 AI Trade: {side} {symbol} | source={source} | "
             f"Base ${base_amount} × {confidence}% = ${trade_amount} | "
             f"Size {size:.6f}"
+            + (f" | bitget_order={bitget_order_id}" if bitget_order_id else "")
         )
 
         await telegram_service.send_trade_alert(position, "OPEN")
@@ -1212,10 +1385,8 @@ async def auto_trade(
     confidence_threshold = settings.confidence_threshold
     strategy_name = getattr(settings, "strategy_type", None) or "balanced"
 
-    # 🔥 Build user's current OPEN positions once — passed to every analysis
     user_positions = list_positions(db, user_id=current_user.id, status="OPEN")
 
-    # Analyze each symbol with strategy + position context
     signals = {}
     for sym in ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]:
         signals[sym] = await ai_trading_service.analyze_symbol(
@@ -1226,6 +1397,7 @@ async def auto_trade(
         )
 
     results = []
+    failures = []
     for symbol, signal in signals.items():
         if symbol not in user_symbols:
             continue
@@ -1234,13 +1406,35 @@ async def auto_trade(
         sig = signal["signal"]
 
         if sig in ("BUY", "SELL", "ADD"):
-            trade = await execute_ai_trade(symbol, sig, signal, current_user.id)
-            results.append(trade)
+            # 🔥 Task #4a-2: isolate per-symbol failures so one rejected
+            # Bitget order does not abort the whole batch.
+            try:
+                trade = await execute_ai_trade(symbol, sig, signal, current_user.id)
+                results.append(trade)
+            except HTTPException as exc:
+                logger.warning(f"auto_trade: {symbol} {sig} failed: {exc.detail}")
+                failures.append({
+                    "symbol": symbol,
+                    "side": sig,
+                    "error": str(exc.detail),
+                })
+            except Exception as exc:
+                logger.exception(f"auto_trade: unexpected error on {symbol}")
+                failures.append({
+                    "symbol": symbol,
+                    "side": sig,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+
+    message = f"Executed {len(results)} trades"
+    if failures:
+        message += f", {len(failures)} failed"
 
     return {
-        "message": f"Executed {len(results)} trades",
+        "message": message,
         "strategy": strategy_name,
         "trades": results,
+        "failures": failures,   # 🔥 new field — frontend can ignore
         "settings_used": {
             "confidence_threshold": confidence_threshold,
             "trade_amount": settings.trade_amount,
@@ -1287,19 +1481,12 @@ async def get_performance():
     return position_monitor.get_performance_stats()
 
 # ============================================
-# AI SETTINGS ROUTER
+# ROUTERS
 # ============================================
 app.include_router(ai_settings.router, prefix=settings.api_prefix)
-
-# ============================================
-# 📊 ANALYTICS ROUTER
-# ============================================
 app.include_router(analytics.router, prefix=settings.api_prefix)
-
-# ============================================
-# 💳 PAYMENTS ROUTER
-# ============================================
 app.include_router(payments.router, prefix=settings.api_prefix)
+app.include_router(exchange.router, prefix=settings.api_prefix)
 
 # ============================================
 # TELEGRAM TEST ENDPOINT
@@ -1398,6 +1585,8 @@ async def startup_event():
     logger.info(f"🔍 TELEGRAM_BOT_TOKEN: {'✅ set' if bot_token else '❌ missing'}")
     logger.info(f"🔍 TELEGRAM_CHAT_ID:   {'✅ set' if chat_id else '❌ missing'}")
     logger.info(f"🔍 ADMIN_BOOTSTRAP_KEY: {'✅ set' if os.getenv('ADMIN_BOOTSTRAP_KEY') else '❌ missing'}")
+    logger.info(f"🔍 ENCRYPTION_KEY: {'✅ set' if os.getenv('ENCRYPTION_KEY') else '❌ missing (using ephemeral key — exchange credentials will not survive restart!)'}")
+    logger.info(f"🔍 BITGET_TESTNET: {os.getenv('BITGET_TESTNET', 'true')}")
 
     if bot_token and chat_id:
         telegram_service.initialize(bot_token, chat_id)
@@ -1409,8 +1598,6 @@ async def startup_event():
     prices = market_data_service.get_market_prices()
     logger.info(f"📊 Loaded {len(prices)} market prices")
     
-    # 🔥 Task #3: position_monitor no longer receives a list reference —
-    # it reads from the positions table on each tick.
     await position_monitor.start(market_data_service)
     logger.info("✅ Position Monitor started")
     
