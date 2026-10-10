@@ -101,6 +101,8 @@ class Settings(BaseSettings):
     bitget_default_symbols: Union[str, List[str]] = (
         "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT"
     )
+    # 🔥 Task #4: flip to False once live trading is validated
+    bitget_testnet: bool = True
 
     # ============================================
     # Payment
@@ -112,9 +114,6 @@ class Settings(BaseSettings):
     min_payment_confirmations: int = 6
 
     # 🔥 Blockchain verification API keys — OPTIONAL
-    # Priority order for BEP20: NodeReal → BscScan → manual admin approval
-    # Priority order for ERC20: Etherscan → manual admin approval
-    # If missing, payments fall back to admin manual approval.
     nodereal_api_key: Optional[str] = None     # https://dashboard.nodereal.io
     bscscan_api_key: Optional[str] = None      # https://bscscan.com/myapikey (deprecated)
     etherscan_api_key: Optional[str] = None    # https://etherscan.io/myapikey
