@@ -1,27 +1,86 @@
 /**
  * Exchange (Bitget) API client.
  *
- * Mirrors the shape of @/api/aiSettings — same base URL, same auth header,
- * same error surfacing so toasts behave consistently across the app.
+ * Uses the app's auth token from whichever source it lives in.
+ * Reads from, in priority order:
+ *   1. Zustand auth store (`useAuthStore.getState().accessToken`)
+ *   2. localStorage direct keys (accessToken / token / jwt)
+ *   3. Zustand-persist envelopes (auth-storage / authStore / etc.)
+ *   4. sessionStorage (same shape)
  */
 
 import axios, { AxiosError } from 'axios';
+import { useAuthStore } from '@/store/authStore';
 
 const API_BASE =
   import.meta.env.VITE_API_URL ||
   'https://jadota-ai.onrender.com/api/v1';
 
-function getToken(): string | null {
-  // Try the common storage keys the app uses for the access token.
-  return (
-    localStorage.getItem('accessToken') ||
-    localStorage.getItem('token') ||
-    null
-  );
+// ============================================
+// Token resolution — try every plausible source
+// ============================================
+function _tryParsePersist(raw: string | null): string | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return (
+      parsed?.state?.accessToken ||
+      parsed?.state?.token ||
+      parsed?.state?.jwt ||
+      parsed?.accessToken ||
+      parsed?.token ||
+      null
+    );
+  } catch {
+    return null;
+  }
 }
 
-function authHeaders() {
-  const token = getToken();
+export function getAuthToken(): string | null {
+  // 1. Zustand store
+  try {
+    const state: any = (useAuthStore as any).getState?.();
+    const t = state?.accessToken || state?.token || state?.jwt;
+    if (t) return t;
+  } catch {
+    // store not available — fall through
+  }
+
+  // 2. Direct localStorage keys
+  const direct = ['accessToken', 'token', 'jwt', 'authToken'];
+  for (const key of direct) {
+    const v = localStorage.getItem(key);
+    if (v) return v;
+  }
+
+  // 3. Zustand persist envelopes
+  const persistKeys = [
+    'auth-storage',
+    'authStore',
+    'jadota-auth',
+    'auth',
+    'jadota-auth-storage',
+  ];
+  for (const key of persistKeys) {
+    const t = _tryParsePersist(localStorage.getItem(key));
+    if (t) return t;
+  }
+
+  // 4. Same set of keys in sessionStorage
+  for (const key of direct) {
+    const v = sessionStorage.getItem(key);
+    if (v) return v;
+  }
+  for (const key of persistKeys) {
+    const t = _tryParsePersist(sessionStorage.getItem(key));
+    if (t) return t;
+  }
+
+  return null;
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getAuthToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
