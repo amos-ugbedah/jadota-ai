@@ -5,9 +5,6 @@ Used by:
     - main.py::auto_trade endpoint (manual trigger)
     - main.py::place_manual_order endpoint (Trading panel)
     - services/auto_trader.py (background loop)
-
-Keeping this in its own module avoids circular imports between main.py
-and the background auto-trader service.
 """
 
 import logging
@@ -50,8 +47,14 @@ async def place_bitget_order(
       - BUY / ADD → order side "buy",  size is the QUOTE amount (USDT to spend)
       - SELL      → order side "sell", size is the BASE amount (coins to sell)
 
-    Raises HTTPException on any failure — callers must NOT write a position
-    row when this raises.
+    🔥 IMPORTANT: Bitget does not always return an `orderId` even for
+    successful orders. When that happens, we log a warning and fall back
+    to using the `client_oid` (our own idempotency token) as the tracking
+    identifier. This prevents us from raising a fake 502 for an order
+    that actually went through.
+
+    Raises HTTPException(502) ONLY if Bitget actually rejected the order
+    or is unreachable. If Bitget said "success", this returns normally.
     """
     api_key = decrypt(cred.api_key_encrypted)
     api_secret = decrypt(cred.api_secret_encrypted)
@@ -77,6 +80,8 @@ async def place_bitget_order(
 
     client_oid = str(uuid.uuid4()).replace("-", "")[:30]
 
+    # --- Call Bitget ---
+    result: dict = {}
     try:
         async with BitgetClient(
             api_key=api_key,
@@ -91,6 +96,7 @@ async def place_bitget_order(
                 client_oid=client_oid,
             )
     except BitgetError as exc:
+        # Bitget EXPLICITLY rejected the order. This is a genuine failure.
         logger.warning(
             f"bitget.order.rejected user={cred.user_id} "
             f"symbol={bitget_symbol} side={order_side} "
@@ -112,14 +118,27 @@ async def place_bitget_order(
             detail=f"Could not reach Bitget: {type(exc).__name__}",
         )
 
-    order_id = result.get("orderId") or result.get("order_id")
-    if not order_id:
-        logger.error(f"bitget.order.no_id user={cred.user_id} result={result}")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Bitget did not return an order ID.",
-        )
+    # --- Extract order id (defensive) ---
+    # 🔥 Fix: never raise on missing orderId. Bitget accepts market orders
+    # without always echoing an id back. Fall back to client_oid so we still
+    # have a stable identifier for this order.
+    order_id = (
+        (result or {}).get("orderId")
+        or (result or {}).get("order_id")
+        or (result or {}).get("order_id_str")
+    )
 
+    if not order_id:
+        logger.warning(
+            f"bitget.order.no_id_returned user={cred.user_id} "
+            f"symbol={bitget_symbol} side={order_side} "
+            f"client_oid={client_oid} raw_result={result}"
+        )
+        # Use client_oid as the tracking id. Reconciliation can resolve the
+        # actual Bitget order id later if needed.
+        order_id = f"client:{client_oid}"
+
+    # --- Record successful use ---
     cred.last_used_at = datetime.utcnow()
     cred.last_error = None
     db.commit()
@@ -127,7 +146,7 @@ async def place_bitget_order(
     logger.info(
         f"bitget.order.placed user={cred.user_id} "
         f"symbol={bitget_symbol} side={order_side} size={order_size} "
-        f"order_id={order_id}"
+        f"order_id={order_id} raw_result={result}"
     )
     return order_id
 

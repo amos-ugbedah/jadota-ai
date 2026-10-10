@@ -125,9 +125,6 @@ class BitgetClient:
 
         return data.get("data")
 
-    # ============================================
-    # Endpoints
-    # ============================================
     async def get_account_info(self) -> Any:
         return await self._request("GET", "/api/v2/account/all-account-balance")
 
@@ -135,14 +132,10 @@ class BitgetClient:
         params = {"symbol": symbol} if symbol else None
         return await self._request("GET", "/api/v2/spot/trade/unfilled-orders", params=params)
 
-    # 🔥 Task #4b: fetch a single order's details (used by reconciliation)
     async def get_order_detail(self, order_id: str, symbol: str) -> Dict[str, Any]:
         """
         Fetch a single spot order's details by ID.
-
-        Both `orderId` and `symbol` are required by Bitget. The returned
-        dict includes `status` ("live" | "filled" | "cancelled" | etc.)
-        and `priceAvg` / `fillPrice` when applicable.
+        Both `orderId` and `symbol` are required by Bitget.
         """
         params = {"orderId": order_id, "symbol": symbol}
         return await self._request("GET", "/api/v2/spot/trade/orderInfo", params=params)
@@ -154,6 +147,17 @@ class BitgetClient:
         size: str,
         client_oid: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """
+        Place a spot market order.
+
+        🔥 IMPORTANT: Bitget does NOT always return an `orderId` in the
+        response, even when the order is accepted. For some market orders,
+        the response is `{"code": "00000", "data": {}}` (empty data) — the
+        order IS placed, but there's no explicit order id in the response.
+
+        This method normalizes the response to always be a dict (never None),
+        so callers can safely use `.get()` without crashing.
+        """
         body: Dict[str, Any] = {
             "symbol": symbol,
             "side": side.lower(),
@@ -162,16 +166,19 @@ class BitgetClient:
         }
         if client_oid:
             body["clientOid"] = client_oid
-        return await self._request("POST", "/api/v2/spot/trade/place-order", body=body)
 
-    # 🔥 Task #4c: live wallet balances
+        result = await self._request("POST", "/api/v2/spot/trade/place-order", body=body)
+
+        # Normalize: success responses sometimes carry data:null
+        if isinstance(result, dict):
+            return result
+        if result is None:
+            return {}
+        # Any other shape (list, str) — wrap it so callers can .get() it
+        return {"raw": result}
+
     async def get_spot_balances(self, coin: Optional[str] = None) -> List[Dict[str, Any]]:
-        """
-        Fetch spot wallet balances.
-
-        Returns a normalized list:
-            [{"asset": "USDT", "free": 1000.0, "used": 0.0, "total": 1000.0}, ...]
-        """
+        """Fetch spot wallet balances."""
         params = {"coin": coin} if coin else None
         data = await self._request("GET", "/api/v2/spot/account/assets", params=params)
 
