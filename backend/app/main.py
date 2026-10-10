@@ -83,7 +83,6 @@ except Exception as e:
 def _run_startup_migrations():
     from sqlalchemy import text as _sql_text, inspect as _inspect
 
-    # Expected columns for ai_settings
     expected_ai_settings = {
         "trade_amount": "FLOAT DEFAULT 25.0",
         "stop_loss_percent": "FLOAT DEFAULT 2.0",
@@ -105,7 +104,6 @@ def _run_startup_migrations():
         "worst_trade": "FLOAT DEFAULT 0.0",
     }
 
-    # Expected columns for payments
     expected_payments = {
         "plan": "VARCHAR(50) DEFAULT 'PRO'",
         "months": "FLOAT DEFAULT 1.0",
@@ -121,7 +119,6 @@ def _run_startup_migrations():
         "completed_at": "TIMESTAMP",
     }
 
-    # 🔥 Task #3 + #4a-2 + #4b: Expected columns for positions
     expected_positions = {
         "user_id": "VARCHAR(36)",
         "symbol": "VARCHAR(20)",
@@ -145,15 +142,12 @@ def _run_startup_migrations():
         "closed_at": "TIMESTAMP",
         "created_at": "TIMESTAMP DEFAULT NOW()",
         "updated_at": "TIMESTAMP",
-        # 🔥 Task #4a-2 — Bitget linkage
         "bitget_order_id": "VARCHAR(100)",
         "source": "VARCHAR(20) DEFAULT 'demo'",
-        # 🔥 Task #4b — reconciliation metadata
         "reconciliation_status": "VARCHAR(20)",
         "last_reconciled_at": "TIMESTAMP",
     }
 
-    # 🔥 Task #4a-1: Expected columns for exchange_credentials
     expected_exchange_credentials = {
         "user_id": "VARCHAR(36)",
         "exchange": "VARCHAR(20) DEFAULT 'bitget'",
@@ -175,7 +169,6 @@ def _run_startup_migrations():
         tables = set(inspector.get_table_names())
 
         with engine.connect() as conn:
-            # ---------- ai_settings ----------
             if "ai_settings" in tables:
                 actual = {c["name"] for c in inspector.get_columns("ai_settings")}
                 missing = {k: v for k, v in expected_ai_settings.items() if k not in actual}
@@ -192,7 +185,6 @@ def _run_startup_migrations():
                 else:
                     logger.info("✅ ai_settings schema is up to date")
 
-            # ---------- payments ----------
             if "payments" in tables:
                 actual = {c["name"] for c in inspector.get_columns("payments")}
                 missing = {k: v for k, v in expected_payments.items() if k not in actual}
@@ -209,7 +201,6 @@ def _run_startup_migrations():
                 else:
                     logger.info("✅ payments schema is up to date")
 
-            # ---------- positions (Task #3 + #4a-2 + #4b) ----------
             if "positions" in tables:
                 actual = {c["name"] for c in inspector.get_columns("positions")}
                 missing = {k: v for k, v in expected_positions.items() if k not in actual}
@@ -226,7 +217,6 @@ def _run_startup_migrations():
                 else:
                     logger.info("✅ positions schema is up to date")
 
-            # ---------- exchange_credentials (Task #4a-1) ----------
             if "exchange_credentials" in tables:
                 actual = {c["name"] for c in inspector.get_columns("exchange_credentials")}
                 missing = {k: v for k, v in expected_exchange_credentials.items() if k not in actual}
@@ -764,7 +754,6 @@ async def get_admin_users(db: Session = Depends(get_db)):
         for u in users
     ]
 
-# 🔥 Task #4c: real subscription list (was returning [])
 @app.get("/api/v1/admin/subscriptions", dependencies=[Depends(get_admin_user)])
 async def get_admin_subscriptions(db: Session = Depends(get_db)):
     """List users with a paid subscription plan (admin only)."""
@@ -802,7 +791,6 @@ async def get_system_status():
         "drawdown": 0
     }
 
-# 🔥 Task #4c: real revenue (was returning all zeros)
 @app.get("/api/v1/admin/revenue", dependencies=[Depends(get_admin_user)])
 async def get_revenue(db: Session = Depends(get_db)):
     """Revenue stats from the payments table (admin only)."""
@@ -866,7 +854,6 @@ async def get_ai_status():
         "tradesToday": 0
     }
 
-# 🔥 Task #4b: manual reconciliation trigger (admin only)
 @app.post("/api/v1/admin/reconcile", dependencies=[Depends(get_admin_user)])
 async def admin_trigger_reconciliation():
     """Manually trigger a reconciliation pass. (admin only)"""
@@ -882,57 +869,27 @@ async def get_subscription_plans():
     """Get available subscription plans"""
     return [
         {
-            "id": "plan-basic",
-            "name": "Basic",
-            "tier": "BASIC",
-            "price": 0,
-            "currency": "USDT",
-            "duration": 1,
-            "features": [
-                "📊 Demo Trading",
-                "📈 Basic AI Signals",
-                "📋 Paper Trading",
-                "📱 Basic Dashboard"
-            ],
+            "id": "plan-basic", "name": "Basic", "tier": "BASIC", "price": 0,
+            "currency": "USDT", "duration": 1,
+            "features": ["📊 Demo Trading", "📈 Basic AI Signals", "📋 Paper Trading", "📱 Basic Dashboard"],
             "isPopular": False
         },
         {
-            "id": "plan-pro",
-            "name": "Pro",
-            "tier": "PRO",
-            "price": 29.99,
-            "currency": "USDT",
-            "duration": 1,
-            "features": [
-                "🔴 Live Trading",
-                "🧠 Advanced AI Engine",
-                "🛡️ Risk Management",
-                "⚡ Priority Support",
-                "📊 Real-time Analytics",
-                "🔔 Custom Alerts"
-            ],
+            "id": "plan-pro", "name": "Pro", "tier": "PRO", "price": 29.99,
+            "currency": "USDT", "duration": 1,
+            "features": ["🔴 Live Trading", "🧠 Advanced AI Engine", "🛡️ Risk Management",
+                         "⚡ Priority Support", "📊 Real-time Analytics", "🔔 Custom Alerts"],
             "isPopular": True
         },
         {
-            "id": "plan-enterprise",
-            "name": "Enterprise",
-            "tier": "ENTERPRISE",
-            "price": 99.99,
-            "currency": "USDT",
-            "duration": 1,
-            "features": [
-                "🏢 All Pro Features",
-                "🔄 Multiple Exchanges",
-                "🎯 Custom Strategies",
-                "👨‍💼 Dedicated Support",
-                "📈 Advanced Analytics",
-                "🔐 White-label Options"
-            ],
+            "id": "plan-enterprise", "name": "Enterprise", "tier": "ENTERPRISE", "price": 99.99,
+            "currency": "USDT", "duration": 1,
+            "features": ["🏢 All Pro Features", "🔄 Multiple Exchanges", "🎯 Custom Strategies",
+                         "👨‍💼 Dedicated Support", "📈 Advanced Analytics", "🔐 White-label Options"],
             "isPopular": False
         }
     ]
 
-# 🔥 Task #4c: real current subscription (was returning None)
 @app.get("/api/v1/subscription/current")
 async def get_current_subscription(
     current_user: User = Depends(get_current_user),
@@ -979,19 +936,9 @@ async def get_market_symbols():
 async def get_ohlcv(symbol: str, interval: str = "1h", limit: int = 100):
     """Get OHLCV data for a symbol."""
     interval_map = {
-        "1m": "1min",
-        "3m": "3min",
-        "5m": "5min",
-        "15m": "15min",
-        "30m": "30min",
-        "1h": "1h",
-        "4h": "4h",
-        "6h": "6h",
-        "12h": "12h",
-        "1d": "1day",
-        "3d": "3day",
-        "1w": "1week",
-        "1M": "1M",
+        "1m": "1min", "3m": "3min", "5m": "5min", "15m": "15min", "30m": "30min",
+        "1h": "1h", "4h": "4h", "6h": "6h", "12h": "12h", "1d": "1day",
+        "3d": "3day", "1w": "1week", "1M": "1M",
     }
 
     bitget_symbol = symbol.replace('/', '')
@@ -1001,26 +948,16 @@ async def get_ohlcv(symbol: str, interval: str = "1h", limit: int = 100):
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(
                 "https://api.bitget.com/api/v2/spot/market/candles",
-                params={
-                    "symbol": bitget_symbol,
-                    "granularity": bitget_interval,
-                    "limit": limit
-                }
+                params={"symbol": bitget_symbol, "granularity": bitget_interval, "limit": limit}
             )
 
             if response.status_code != 200:
-                logger.warning(
-                    f"Bitget candles HTTP {response.status_code} for {symbol}: "
-                    f"{response.text[:200]}"
-                )
+                logger.warning(f"Bitget candles HTTP {response.status_code} for {symbol}: {response.text[:200]}")
                 return []
 
             data = response.json()
             if data.get('code') != '00000' or not data.get('data'):
-                logger.warning(
-                    f"Bitget candles error for {symbol}: "
-                    f"code={data.get('code')} msg={data.get('msg')}"
-                )
+                logger.warning(f"Bitget candles error for {symbol}: code={data.get('code')} msg={data.get('msg')}")
                 return []
 
             candles = []
@@ -1180,7 +1117,7 @@ async def ai_status():
     }
 
 # ============================================
-# AUTO-TRADING ENDPOINTS (Task #3 + #4a-2)
+# AUTO-TRADING + MANUAL-ORDER HELPERS
 # ============================================
 
 async def _place_bitget_order(
@@ -1279,16 +1216,7 @@ async def _place_bitget_order(
 
 
 async def execute_ai_trade(symbol: str, side: str, signal: dict, user_id: str = None):
-    """
-    Execute a trade based on an AI signal.
-
-    Task #4a-2 behavior:
-      - If the user has an active Bitget connection, the order is placed
-        on Bitget *before* any DB write. If Bitget rejects, HTTPException
-        is raised and no position row is created.
-      - If the user has no Bitget connection, behavior is unchanged:
-        a demo-only position is written (source="demo").
-    """
+    """Execute a trade based on an AI signal. Writes to the `positions` table."""
     from .models.ai_settings import AISettings
 
     base_amount = 25.0
@@ -1441,8 +1369,10 @@ async def auto_trade(
 
     user_positions = list_positions(db, user_id=current_user.id, status="OPEN")
 
+    # 🔥 FIX: Analyze the symbols the user actually selected, not a hardcoded list.
+    symbols_to_analyze = user_symbols if user_symbols else ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
     signals = {}
-    for sym in ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]:
+    for sym in symbols_to_analyze:
         signals[sym] = await ai_trading_service.analyze_symbol(
             sym,
             timeframe="1h",
@@ -1533,6 +1463,168 @@ async def get_performance():
     return position_monitor.get_performance_stats()
 
 # ============================================
+# MANUAL TRADING (LIVE) — Task #5
+# ============================================
+# Places a real Bitget spot market order from the Trading panel.
+# Market orders only for now — limit orders need unfilled-order tracking.
+
+@app.post("/api/v1/trading/manual-order")
+async def place_manual_order(
+    request: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Place a live manual order via the Trading panel.
+
+    Body:
+        symbol (str): e.g. "BTC/USDT"
+        side   (str): "BUY" or "SELL"
+        size   (float): For BUY, base asset quantity (e.g. 0.001 BTC).
+                        For SELL, base asset quantity to sell.
+        type   (str, optional): "MARKET" (default). LIMIT is rejected.
+        stopLoss (float, optional): absolute price
+        takeProfit (float, optional): absolute price
+
+    Requires an active Bitget connection.
+    """
+    from .models.ai_settings import AISettings
+
+    symbol = request.get("symbol", "BTC/USDT")
+    side = (request.get("side") or "BUY").upper()
+    order_type = (request.get("type") or "MARKET").upper()
+    size_raw = request.get("size")
+    stop_loss_raw = request.get("stopLoss")
+    take_profit_raw = request.get("takeProfit")
+
+    # --- validate ---
+    if side not in ("BUY", "SELL"):
+        raise HTTPException(status_code=400, detail="Side must be BUY or SELL")
+    try:
+        size = float(size_raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Size must be a number")
+    if size <= 0:
+        raise HTTPException(status_code=400, detail="Size must be greater than 0")
+    if order_type != "MARKET":
+        raise HTTPException(
+            status_code=400,
+            detail="Live mode currently supports MARKET orders only.",
+        )
+
+    # --- require Bitget connection ---
+    cred = (
+        db.query(ExchangeCredentials)
+        .filter(
+            ExchangeCredentials.user_id == current_user.id,
+            ExchangeCredentials.exchange == "bitget",
+            ExchangeCredentials.is_active == True,  # noqa: E712
+        )
+        .first()
+    )
+    if not cred:
+        raise HTTPException(
+            status_code=400,
+            detail="No active Bitget connection. Connect one in Settings → API Keys.",
+        )
+
+    # --- current price ---
+    current_price = market_data_service.get_price(symbol)
+    if current_price == 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not fetch a live price for {symbol}. Try again in a moment.",
+        )
+
+    # --- compute order-side sizes ---
+    if side == "BUY":
+        trade_amount = size * current_price   # USDT to spend
+        base_size = size                       # base to buy
+    else:
+        trade_amount = 0.0                     # unused on sell
+        base_size = size                       # base to sell
+
+    # --- place the real order FIRST ---
+    bitget_order_id = await _place_bitget_order(
+        cred=cred,
+        db=db,
+        symbol=symbol,
+        side=side,
+        trade_amount=trade_amount,
+        base_size=base_size,
+    )
+
+    # --- SL/TP: prefer explicit absolute prices from the request; else
+    #     fall back to the user's AI settings percentages ---
+    user_settings = (
+        db.query(AISettings).filter(AISettings.user_id == current_user.id).first()
+    )
+    stop_loss_pct = ((user_settings.stop_loss_percent or 2.0) / 100) if user_settings else 0.02
+    take_profit_pct = ((user_settings.take_profit_percent or 4.0) / 100) if user_settings else 0.04
+
+    try:
+        if stop_loss_raw not in (None, "", 0):
+            stop_loss_abs = float(stop_loss_raw)
+            stop_loss_pct = abs(current_price - stop_loss_abs) / current_price
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        if take_profit_raw not in (None, "", 0):
+            take_profit_abs = float(take_profit_raw)
+            take_profit_pct = abs(take_profit_abs - current_price) / current_price
+    except (TypeError, ValueError):
+        pass
+
+    # --- position row ---
+    if side == "BUY":
+        sl_price = round(current_price * (1 - stop_loss_pct), 8)
+        tp_price = round(current_price * (1 + take_profit_pct), 8)
+        notional = round(size * current_price, 8)
+    else:
+        # SELL position: SL above entry, TP below entry
+        sl_price = round(current_price * (1 + stop_loss_pct), 8)
+        tp_price = round(current_price * (1 - take_profit_pct), 8)
+        notional = round(size * current_price, 8)
+
+    position = create_position(db, {
+        "id": str(uuid.uuid4()),
+        "user_id": current_user.id,
+        "symbol": symbol,
+        "side": side,
+        "size": round(size, 8),
+        "entryPrice": current_price,
+        "currentPrice": current_price,
+        "unrealizedPnl": 0.00,
+        "realizedPnl": 0.00,
+        "tradeAmount": notional,
+        "baseAmount": 0.0,
+        "stopLoss": sl_price,
+        "takeProfit": tp_price,
+        "stopLossPct": stop_loss_pct,
+        "takeProfitPct": take_profit_pct,
+        "openedAt": datetime.utcnow().isoformat(),
+        "status": "OPEN",
+        "aiConfidence": 100,   # manual trades: 100% user intent
+        "aiReasoning": "Manual order via Trading panel",
+        "bitgetOrderId": bitget_order_id,
+        "source": "bitget",
+    })
+
+    logger.info(
+        f"🎯 manual.order user={current_user.id[:8]} "
+        f"{side} {symbol} size={size} @ ~${current_price:.4f} "
+        f"bitget_order={bitget_order_id}"
+    )
+
+    try:
+        await telegram_service.send_trade_alert(position, "OPEN")
+    except Exception as exc:
+        logger.warning(f"manual.order.telegram.error: {exc}")
+
+    return position
+
+# ============================================
 # ROUTERS
 # ============================================
 app.include_router(ai_settings.router, prefix=settings.api_prefix)
@@ -1573,7 +1665,7 @@ async def test_telegram():
         )
 
 # ============================================
-# TRADING ENDPOINTS
+# TRADING ENDPOINTS (legacy stubs — kept for compat)
 # ============================================
 
 @app.get("/api/v1/trading/positions")
@@ -1653,7 +1745,6 @@ async def startup_event():
     await position_monitor.start(market_data_service)
     logger.info("✅ Position Monitor started")
 
-    # 🔥 Task #4b: start reconciliation service
     await reconciliation_service.start()
     
     logger.info("✅ JADOTA AI API started successfully")
@@ -1664,7 +1755,6 @@ async def shutdown_event():
     logger.info("🛑 Shutting down JADOTA AI API...")
     await market_data_service.stop()
     await position_monitor.stop()
-    # 🔥 Task #4b
     await reconciliation_service.stop()
     logger.info("JADOTA AI API shut down")
 

@@ -2,28 +2,30 @@ import React, { useState, useEffect } from 'react';
 import { useTradingStore } from '@/store/tradingStore';
 import { useAuthStore } from '@/store/authStore';
 import { marketApi } from '@/api/market';
+import { exchangeApi } from '@/api/exchange';
+import type { BitgetStatus } from '@/api/exchange';
 import { toast } from 'react-hot-toast';
 import { Link } from 'react-router-dom';
-import { Info, Shield, Sparkles, TrendingUp, TrendingDown } from 'lucide-react';
+import { Info, Shield, Sparkles, TrendingUp, TrendingDown, Loader2 } from 'lucide-react';
 import PositionSourceBadge from '@/components/PositionSourceBadge';
 
 const Trading: React.FC = () => {
   const { user } = useAuthStore();
-  const { 
-    positions, 
-    balance, 
+  const {
+    positions,
+    balance,
     demoBalance,
     marketPrices,
-    placeOrder, 
-    closePosition, 
-    fetchPositions, 
+    placeOrder,
+    closePosition,
+    fetchPositions,
     fetchBalance,
     fetchDemoBalance,
     fetchMarketPrices,
-    isSubmitting 
+    isSubmitting,
   } = useTradingStore();
-  
-  const [tradingMode] = useState<'demo' | 'live'>('demo');
+
+  const [tradingMode, setTradingMode] = useState<'demo' | 'live'>('demo');
   const [symbol, setSymbol] = useState('BTC/USDT');
   const [side, setSide] = useState<'BUY' | 'SELL'>('BUY');
   const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('MARKET');
@@ -32,32 +34,57 @@ const Trading: React.FC = () => {
   const [stopLoss, setStopLoss] = useState<number | undefined>(undefined);
   const [takeProfit, setTakeProfit] = useState<number | undefined>(undefined);
 
-  // Fetch market prices on load and every 5 seconds
-  useEffect(() => {
-    fetchPositions();
-    fetchBalance();
-    fetchDemoBalance();
-    fetchMarketPrices();
-    
-    const interval = setInterval(() => {
-      fetchMarketPrices();
-      fetchPositions(); // Update positions with latest prices
-    }, 5000);
-    
-    return () => clearInterval(interval);
-  }, []);
+  // Bitget connection state
+  const [bitgetStatus, setBitgetStatus] = useState<BitgetStatus | null>(null);
+  const [liveUsdt, setLiveUsdt] = useState<number | null>(null);
+  const [isLiveSubmitting, setIsLiveSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
+    // ---- LIVE path ----
+    if (tradingMode === 'live') {
+      if (!bitgetStatus?.connected) {
+        toast.error('Connect your Bitget account in Settings → API Keys first');
+        return;
+      }
+      if (orderType !== 'MARKET') {
+        toast.error('Live mode currently supports Market orders only');
+        return;
+      }
+      setIsLiveSubmitting(true);
+      try {
+        const result = await exchangeApi.placeManualOrder({
+          symbol,
+          side,
+          size,
+          type: 'MARKET',
+          stopLoss,
+          takeProfit,
+        });
+        toast.success(
+          `✅ Live ${side} order placed on Bitget · #${(result.bitgetOrderId || '').slice(0, 8)}`
+        );
+        await Promise.all([
+          fetchPositions(),
+          fetchMarketPrices(),
+          loadLiveBalance(),
+        ]);
+      } catch (error: any) {
+        toast.error(error?.message || 'Live order failed');
+      } finally {
+        setIsLiveSubmitting(false);
+      }
+      return;
+    }
+
+    // ---- DEMO path (unchanged) ----
     const currentBalance = demoBalance?.available || user?.demoBalance || 0;
     const estimatedCost = size * 45000;
-    
     if (currentBalance < estimatedCost) {
       toast.error(`❌ Insufficient demo balance! Available: $${currentBalance.toFixed(2)}`);
       return;
     }
-
     try {
       const result = await placeOrder({
         symbol,
@@ -67,16 +94,15 @@ const Trading: React.FC = () => {
         price,
         stopLoss,
         takeProfit,
-        mode: 'demo'
+        mode: 'demo',
       });
-      
       if (result) {
         toast.success(`✅ Demo order placed successfully!`);
         await Promise.all([
           fetchPositions(),
           fetchBalance(),
           fetchDemoBalance(),
-          fetchMarketPrices()
+          fetchMarketPrices(),
         ]);
       }
     } catch (error: any) {
@@ -84,8 +110,66 @@ const Trading: React.FC = () => {
     }
   };
 
-  const openPositions = positions.filter(p => p.status === 'OPEN');
+  const loadBitgetStatus = async () => {
+    try {
+      const status = await exchangeApi.getBitgetStatus();
+      setBitgetStatus(status);
+    } catch (error) {
+      // Not fatal — user just sees Live as unavailable
+      setBitgetStatus({ connected: false, exchange: 'bitget' });
+    }
+  };
+
+  const loadLiveBalance = async () => {
+    try {
+      const data = await exchangeApi.getBalance('USDT');
+      const usdt = data.balances.find((b) => b.asset.toUpperCase() === 'USDT');
+      setLiveUsdt(usdt?.free ?? 0);
+    } catch (error: any) {
+      // Silent — the info card will just show N/A
+      setLiveUsdt(null);
+    }
+  };
+
+  useEffect(() => {
+    fetchPositions();
+    fetchBalance();
+    fetchDemoBalance();
+    fetchMarketPrices();
+    loadBitgetStatus();
+
+    const interval = setInterval(() => {
+      fetchMarketPrices();
+      fetchPositions();
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // When user switches to live mode, refresh the balance
+  useEffect(() => {
+    if (tradingMode === 'live' && bitgetStatus?.connected) {
+      loadLiveBalance();
+    }
+  }, [tradingMode, bitgetStatus?.connected]);
+
+  const openPositions = positions.filter((p) => p.status === 'OPEN');
   const totalPnl = openPositions.reduce((sum, p) => sum + (p.unrealizedPnl || 0), 0);
+  const isBitgetConnected = !!bitgetStatus?.connected;
+  const isLive = tradingMode === 'live';
+
+  // Effective balance in the info sidebar
+  const displayBalance = isLive
+    ? {
+        total: liveUsdt ?? 0,
+        available: liveUsdt ?? 0,
+        locked: 0,
+      }
+    : {
+        total: demoBalance?.total || user?.demoBalance || 0,
+        available: demoBalance?.available || user?.demoBalance || 0,
+        locked: demoBalance?.locked || 0,
+      };
 
   return (
     <div className="grid grid-cols-1 gap-6 p-6 mx-auto lg:grid-cols-3 max-w-7xl">
@@ -99,8 +183,8 @@ const Trading: React.FC = () => {
           </div>
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
             {marketPrices.slice(0, 8).map((item) => (
-              <div 
-                key={item.symbol} 
+              <div
+                key={item.symbol}
                 className={`bg-[#0a0a1a] rounded-lg p-3 border border-[#2a2a4a] cursor-pointer hover:border-[#6366f1]/30 transition ${
                   symbol === item.symbol ? 'border-[#6366f1]' : ''
                 }`}
@@ -120,35 +204,73 @@ const Trading: React.FC = () => {
         <div className="bg-[#1a1a2e] rounded-xl p-6 border border-[#2a2a4a]">
           <div className="flex flex-col items-start justify-between gap-3 mb-4 sm:flex-row sm:items-center">
             <h2 className="text-xl font-bold text-white">Trading Panel</h2>
-            
+
             <div className="flex gap-1 bg-[#0a0a1a] rounded-lg p-1">
               <button
                 type="button"
-                className="px-4 py-1.5 rounded-lg text-sm font-medium bg-[#6366f1] text-white cursor-default"
+                onClick={() => setTradingMode('demo')}
+                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition ${
+                  tradingMode === 'demo'
+                    ? 'bg-[#6366f1] text-white'
+                    : 'text-gray-400 hover:text-white'
+                }`}
               >
                 📊 Demo
               </button>
               <button
                 type="button"
-                disabled
-                className="px-4 py-1.5 rounded-lg text-sm font-medium text-gray-500 cursor-not-allowed opacity-50"
+                onClick={() => {
+                  if (!isBitgetConnected) {
+                    toast.error('Connect Bitget in Settings → API Keys first');
+                    return;
+                  }
+                  setTradingMode('live');
+                }}
+                disabled={!isBitgetConnected}
+                title={isBitgetConnected ? 'Place real orders on Bitget' : 'Connect Bitget to enable live trading'}
+                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition flex items-center gap-1 ${
+                  tradingMode === 'live'
+                    ? 'bg-red-500 text-white'
+                    : isBitgetConnected
+                      ? 'text-gray-400 hover:text-white'
+                      : 'text-gray-600 cursor-not-allowed opacity-60'
+                }`}
               >
                 🔴 Live
-                <span className="ml-1 text-[8px] text-yellow-400">(Soon)</span>
+                {!isBitgetConnected && (
+                  <span className="text-[10px] text-yellow-400">(connect first)</span>
+                )}
               </button>
             </div>
           </div>
-          
-          <div className="p-3 mb-4 text-sm text-blue-400 border rounded-lg bg-blue-500/10 border-blue-500/30">
-            <div className="flex items-center gap-2">
-              <Info className="w-4 h-4" />
-              <span>📊 Demo Mode - No real money involved</span>
+
+          {/* Mode banner */}
+          {isLive ? (
+            <div className="p-3 mb-4 text-sm text-red-400 border rounded-lg bg-red-500/10 border-red-500/30">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4" />
+                <span className="font-medium">
+                  🔴 Live Mode — Real money will be spent from your Bitget spot balance
+                </span>
+              </div>
+              <div className="mt-1 text-xs text-red-300/80">
+                Orders are placed immediately at market price. No confirmation dialog.
+              </div>
             </div>
-            <div className="mt-1 text-xs text-blue-400/70">
-              ⚡ Live trading is coming soon!
+          ) : (
+            <div className="p-3 mb-4 text-sm text-blue-400 border rounded-lg bg-blue-500/10 border-blue-500/30">
+              <div className="flex items-center gap-2">
+                <Info className="w-4 h-4" />
+                <span>📊 Demo Mode - No real money involved</span>
+              </div>
+              {isBitgetConnected && (
+                <div className="mt-1 text-xs text-blue-400/70">
+                  ⚡ Bitget connected — switch to Live to place real orders
+                </div>
+              )}
             </div>
-          </div>
-          
+          )}
+
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block mb-1 text-sm font-medium text-gray-400">
@@ -157,9 +279,7 @@ const Trading: React.FC = () => {
               <select
                 value={symbol}
                 onChange={(e) => setSymbol(e.target.value)}
-                className="w-full px-3 py-2 bg-[#0a0a1a] border border-[#2a2a4a] 
-                         rounded-lg text-white focus:outline-none focus:ring-2 
-                         focus:ring-[#6366f1]"
+                className="w-full px-3 py-2 bg-[#0a0a1a] border border-[#2a2a4a] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#6366f1]"
               >
                 <option value="BTC/USDT">BTC/USDT</option>
                 <option value="ETH/USDT">ETH/USDT</option>
@@ -210,13 +330,15 @@ const Trading: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setOrderType('LIMIT')}
+                disabled={isLive}
+                title={isLive ? 'Limit orders coming soon in live mode' : ''}
                 className={`py-2 rounded-lg text-sm transition ${
                   orderType === 'LIMIT'
                     ? 'bg-[#6366f1] text-white'
                     : 'bg-[#0a0a1a] text-gray-400 hover:bg-[#2a2a4a]'
-                }`}
+                } ${isLive ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
-                Limit
+                Limit {isLive && <span className="text-[10px] text-yellow-400">(soon)</span>}
               </button>
             </div>
 
@@ -230,13 +352,16 @@ const Trading: React.FC = () => {
                 onChange={(e) => setSize(parseFloat(e.target.value))}
                 step="0.0001"
                 min="0.0001"
-                className="w-full px-3 py-2 bg-[#0a0a1a] border border-[#2a2a4a] 
-                         rounded-lg text-white focus:outline-none focus:ring-2 
-                         focus:ring-[#6366f1]"
+                className="w-full px-3 py-2 bg-[#0a0a1a] border border-[#2a2a4a] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#6366f1]"
               />
+              {isLive && (
+                <p className="mt-1 text-xs text-gray-500">
+                  ≈ ${(size * (marketPrices.find((p) => p.symbol === symbol)?.price || 0)).toFixed(2)} at current market price
+                </p>
+              )}
             </div>
 
-            {orderType === 'LIMIT' && (
+            {orderType === 'LIMIT' && !isLive && (
               <div>
                 <label className="block mb-1 text-sm font-medium text-gray-400">
                   Limit Price
@@ -246,9 +371,7 @@ const Trading: React.FC = () => {
                   value={price || ''}
                   onChange={(e) => setPrice(parseFloat(e.target.value))}
                   step="0.1"
-                  className="w-full px-3 py-2 bg-[#0a0a1a] border border-[#2a2a4a] 
-                           rounded-lg text-white focus:outline-none focus:ring-2 
-                           focus:ring-[#6366f1]"
+                  className="w-full px-3 py-2 bg-[#0a0a1a] border border-[#2a2a4a] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#6366f1]"
                 />
               </div>
             )}
@@ -263,9 +386,8 @@ const Trading: React.FC = () => {
                   value={stopLoss || ''}
                   onChange={(e) => setStopLoss(parseFloat(e.target.value))}
                   step="0.1"
-                  className="w-full px-3 py-2 bg-[#0a0a1a] border border-[#2a2a4a] 
-                           rounded-lg text-white focus:outline-none focus:ring-2 
-                           focus:ring-[#6366f1]"
+                  placeholder="Optional"
+                  className="w-full px-3 py-2 bg-[#0a0a1a] border border-[#2a2a4a] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#6366f1]"
                 />
               </div>
               <div>
@@ -277,36 +399,33 @@ const Trading: React.FC = () => {
                   value={takeProfit || ''}
                   onChange={(e) => setTakeProfit(parseFloat(e.target.value))}
                   step="0.1"
-                  className="w-full px-3 py-2 bg-[#0a0a1a] border border-[#2a2a4a] 
-                           rounded-lg text-white focus:outline-none focus:ring-2 
-                           focus:ring-[#6366f1]"
+                  placeholder="Optional"
+                  className="w-full px-3 py-2 bg-[#0a0a1a] border border-[#2a2a4a] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#6366f1]"
                 />
               </div>
             </div>
 
             <div className="flex justify-between text-sm text-gray-400 bg-[#0a0a1a] p-3 rounded-lg">
-              <span>Available Demo Balance:</span>
+              <span>{isLive ? 'Bitget USDT Balance:' : 'Available Demo Balance:'}</span>
               <span className="font-medium text-white">
-                ${(demoBalance?.available || user?.demoBalance || 0).toFixed(2)}
+                ${displayBalance.available.toFixed(2)}
               </span>
             </div>
 
             <button
               type="submit"
-              disabled={isSubmitting}
+              disabled={isSubmitting || isLiveSubmitting}
               className={`w-full py-3 rounded-lg font-bold text-white transition ${
-                side === 'BUY'
-                  ? 'bg-green-500 hover:bg-green-600'
-                  : 'bg-red-500 hover:bg-red-600'
+                side === 'BUY' ? 'bg-green-500 hover:bg-green-600' : 'bg-red-500 hover:bg-red-600'
               } disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2`}
             >
-              {isSubmitting ? (
+              {(isSubmitting || isLiveSubmitting) ? (
                 <>
-                  <span className="animate-spin">⏳</span>
+                  <Loader2 className="w-4 h-4 animate-spin" />
                   Processing...
                 </>
               ) : (
-                `${side === 'BUY' ? 'Buy' : 'Sell'} ${symbol} (DEMO)`
+                `${side === 'BUY' ? 'Buy' : 'Sell'} ${symbol} ${isLive ? '(LIVE)' : '(DEMO)'}`
               )}
             </button>
           </form>
@@ -343,24 +462,26 @@ const Trading: React.FC = () => {
           <div className="space-y-3 text-sm">
             <div className="flex justify-between">
               <span className="text-gray-400">Mode</span>
-              <span className="font-medium text-blue-400">DEMO</span>
+              <span className={`font-medium ${isLive ? 'text-red-400' : 'text-blue-400'}`}>
+                {isLive ? 'LIVE' : 'DEMO'}
+              </span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-400">Available</span>
               <span className="font-medium text-white">
-                ${(demoBalance?.available || user?.demoBalance || 0).toFixed(2)}
+                ${displayBalance.available.toFixed(2)}
               </span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-400">Locked</span>
               <span className="font-medium text-white">
-                ${(demoBalance?.locked || 0).toFixed(2)}
+                ${displayBalance.locked.toFixed(2)}
               </span>
             </div>
             <div className="flex justify-between border-t border-[#2a2a4a] pt-3">
               <span className="text-gray-400">Total</span>
               <span className="font-bold text-white">
-                ${(demoBalance?.total || user?.demoBalance || 0).toFixed(2)}
+                ${displayBalance.total.toFixed(2)}
               </span>
             </div>
           </div>
@@ -380,10 +501,20 @@ const Trading: React.FC = () => {
               </span>
             </div>
           </div>
-          <div className="p-3 mt-4 border rounded-lg bg-yellow-500/10 border-yellow-500/30">
-            <p className="flex items-center justify-center gap-1 text-xs text-center text-yellow-400">
+          <div
+            className={`p-3 mt-4 border rounded-lg ${
+              isLive
+                ? 'bg-red-500/10 border-red-500/30'
+                : 'bg-yellow-500/10 border-yellow-500/30'
+            }`}
+          >
+            <p
+              className={`flex items-center justify-center gap-1 text-xs text-center ${
+                isLive ? 'text-red-400' : 'text-yellow-400'
+              }`}
+            >
               <Shield className="w-3 h-3" />
-              Demo Mode - No real money at risk
+              {isLive ? 'Live Mode - Real money at risk' : 'Demo Mode - No real money at risk'}
             </p>
           </div>
         </div>
@@ -403,7 +534,7 @@ const PositionCard: React.FC<{
           {position.symbol}
           <PositionSourceBadge source={position.source} />
         </p>
-        <p className={`text-sm ${position.side === 'LONG' ? 'text-green-400' : 'text-red-400'}`}>
+        <p className={`text-sm ${position.side === 'LONG' || position.side === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
           {position.side} × {position.size}
         </p>
         <p className="text-xs text-gray-400">
