@@ -5,6 +5,7 @@ import { marketApi } from '@/api/market';
 import { toast } from 'react-hot-toast';
 import { Link } from 'react-router-dom';
 import { Info, Shield, Sparkles, TrendingUp, TrendingDown } from 'lucide-react';
+import PositionSourceBadge from '@/components/PositionSourceBadge';
 
 const Trading: React.FC = () => {
   const { user } = useAuthStore();
@@ -398,7 +399,10 @@ const PositionCard: React.FC<{
   <div className="bg-[#0a0a1a] rounded-lg p-4 border border-[#2a2a4a] hover:border-[#6366f1]/30 transition">
     <div className="flex items-start justify-between">
       <div>
-        <p className="font-semibold text-white">{position.symbol}</p>
+        <p className="flex items-center gap-2 font-semibold text-white">
+          {position.symbol}
+          <PositionSourceBadge source={position.source} />
+        </p>
         <p className={`text-sm ${position.side === 'LONG' ? 'text-green-400' : 'text-red-400'}`}>
           {position.side} × {position.size}
         </p>

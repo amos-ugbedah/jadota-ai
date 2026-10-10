@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import EquityChart from '@/components/Trading/EquityChart';
 import PerformanceMetrics from '@/components/Trading/PerformanceMetrics';
+import PositionSourceBadge from '@/components/PositionSourceBadge';
 
 interface DashboardData {
   portfolio: {
@@ -272,6 +273,7 @@ const TradingDashboard: React.FC = () => {
               <thead>
                 <tr className="border-b border-[#2a2a4a]">
                   <th className="px-4 py-3 text-xs font-medium tracking-wider text-left text-gray-400 uppercase">Symbol</th>
+                  <th className="px-4 py-3 text-xs font-medium tracking-wider text-left text-gray-400 uppercase">Source</th>
                   <th className="px-4 py-3 text-xs font-medium tracking-wider text-left text-gray-400 uppercase">Side</th>
                   <th className="px-4 py-3 text-xs font-medium tracking-wider text-left text-gray-400 uppercase">Entry</th>
                   <th className="px-4 py-3 text-xs font-medium tracking-wider text-left text-gray-400 uppercase">Exit</th>
@@ -283,6 +285,9 @@ const TradingDashboard: React.FC = () => {
                 {data.trade_history.slice(0, 10).map((trade: any, index: number) => (
                   <tr key={index} className="hover:bg-[#0a0a1a]/50 transition">
                     <td className="px-4 py-3 font-medium text-white">{trade.symbol}</td>
+                    <td className="px-4 py-3">
+                      <PositionSourceBadge source={trade.source} />
+                    </td>
                     <td className="px-4 py-3">
                       <span className={`text-xs px-2 py-1 rounded-full ${
                         trade.side === 'BUY' 

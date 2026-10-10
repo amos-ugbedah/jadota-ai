@@ -7,6 +7,7 @@ import {
   ArrowUpRight, ArrowDownRight, Clock, DollarSign 
 } from 'lucide-react';
 import { format } from 'date-fns';
+import PositionSourceBadge from '@/components/PositionSourceBadge';
 
 const Positions: React.FC = () => {
   const { user } = useAuthStore();
@@ -144,7 +145,10 @@ const Positions: React.FC = () => {
             <div className="space-y-3 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-400">Symbol</span>
-                <span className="font-medium text-white">{selectedPosition.symbol}</span>
+                <span className="flex items-center gap-2 font-medium text-white">
+                  {selectedPosition.symbol}
+                  <PositionSourceBadge source={selectedPosition.source} />
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-400">Side</span>
@@ -235,7 +239,10 @@ const PositionRow: React.FC<{
       <div className="flex items-center gap-4">
         <div className={`w-2 h-8 rounded-full ${position.side === 'LONG' ? 'bg-green-400' : 'bg-red-400'}`} />
         <div>
-          <p className="font-semibold text-white">{position.symbol}</p>
+          <p className="flex items-center gap-2 font-semibold text-white">
+            {position.symbol}
+            <PositionSourceBadge source={position.source} />
+          </p>
           <div className="flex items-center gap-3 text-sm">
             <span className={position.side === 'LONG' ? 'text-green-400' : 'text-red-400'}>
               {position.side}
@@ -274,6 +281,7 @@ const ClosedPositionRow: React.FC<{ position: any }> = ({ position }) => (
     <div className="flex flex-col items-start justify-between gap-2 sm:flex-row sm:items-center">
       <div className="flex items-center gap-3">
         <span className="font-medium text-white">{position.symbol}</span>
+        <PositionSourceBadge source={position.source} />
         <span className={`text-sm ${position.side === 'LONG' ? 'text-green-400' : 'text-red-400'}`}>
           {position.side}
         </span>

@@ -9,6 +9,7 @@ import {
   RefreshCw, Brain, Activity, 
   Loader2, Sparkles, Play, Wallet
 } from 'lucide-react';
+import PositionSourceBadge from '@/components/PositionSourceBadge';
 
 const AITrading: React.FC = () => {
   const { user } = useAuthStore();
@@ -233,7 +234,10 @@ const AITrading: React.FC = () => {
               <div key={pos.id} className="bg-[#0a0a1a] rounded-lg p-4 border border-[#2a2a4a]">
                 <div className="flex items-start justify-between">
                   <div>
-                    <p className="font-semibold text-white">{pos.symbol}</p>
+                    <p className="flex items-center gap-2 font-semibold text-white">
+                      {pos.symbol}
+                      <PositionSourceBadge source={pos.source} />
+                    </p>
                     <p className={`text-sm ${pos.side === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
                       {pos.side} × {pos.size}
                     </p>
@@ -276,30 +280,30 @@ const AITrading: React.FC = () => {
             <div>
               <h4 className="mb-3 text-sm font-medium text-gray-400">Technical Indicators</h4>
               <div className="space-y-2 text-sm">
-                <IndicatorRow label="Close Price" value={`$${signal.indicators.close.toFixed(2)}`} />
-                <IndicatorRow label="SMA (7)" value={`$${signal.indicators.sma_7.toFixed(2)}`} />
-                <IndicatorRow label="SMA (25)" value={`$${signal.indicators.sma_25.toFixed(2)}`} />
-                <IndicatorRow label="SMA (99)" value={`$${signal.indicators.sma_99.toFixed(2)}`} />
-                <IndicatorRow label="EMA (12)" value={`$${signal.indicators.ema_12.toFixed(2)}`} />
-                <IndicatorRow label="EMA (26)" value={`$${signal.indicators.ema_26.toFixed(2)}`} />
-                <IndicatorRow label="RSI" value={signal.indicators.rsi.toFixed(2)} />
-                <IndicatorRow label="MACD" value={signal.indicators.macd.toFixed(4)} />
-                <IndicatorRow label="MACD Signal" value={signal.indicators.macd_signal.toFixed(4)} />
+                <IndicatorRow label="Close Price" value={`$${signals[selectedSymbol].indicators.close.toFixed(2)}`} />
+                <IndicatorRow label="SMA (7)" value={`$${signals[selectedSymbol].indicators.sma_7.toFixed(2)}`} />
+                <IndicatorRow label="SMA (25)" value={`$${signals[selectedSymbol].indicators.sma_25.toFixed(2)}`} />
+                <IndicatorRow label="SMA (99)" value={`$${signals[selectedSymbol].indicators.sma_99.toFixed(2)}`} />
+                <IndicatorRow label="EMA (12)" value={`$${signals[selectedSymbol].indicators.ema_12.toFixed(2)}`} />
+                <IndicatorRow label="EMA (26)" value={`$${signals[selectedSymbol].indicators.ema_26.toFixed(2)}`} />
+                <IndicatorRow label="RSI" value={signals[selectedSymbol].indicators.rsi.toFixed(2)} />
+                <IndicatorRow label="MACD" value={signals[selectedSymbol].indicators.macd.toFixed(4)} />
+                <IndicatorRow label="MACD Signal" value={signals[selectedSymbol].indicators.macd_signal.toFixed(4)} />
               </div>
             </div>
             
             <div>
               <h4 className="mb-3 text-sm font-medium text-gray-400">Bollinger Bands</h4>
               <div className="space-y-2 text-sm">
-                <IndicatorRow label="Upper Band" value={`$${signal.indicators.bb_upper.toFixed(2)}`} />
-                <IndicatorRow label="Middle Band" value={`$${signal.indicators.bb_middle.toFixed(2)}`} />
-                <IndicatorRow label="Lower Band" value={`$${signal.indicators.bb_lower.toFixed(2)}`} />
+                <IndicatorRow label="Upper Band" value={`$${signals[selectedSymbol].indicators.bb_upper.toFixed(2)}`} />
+                <IndicatorRow label="Middle Band" value={`$${signals[selectedSymbol].indicators.bb_middle.toFixed(2)}`} />
+                <IndicatorRow label="Lower Band" value={`$${signals[selectedSymbol].indicators.bb_lower.toFixed(2)}`} />
                 <div className="mt-4 p-3 bg-[#0a0a1a] rounded-lg">
                   <p className="text-xs text-gray-400">
-                    <span className="font-medium">AI Reasoning:</span> {signal.reasoning}
+                    <span className="font-medium">AI Reasoning:</span> {signals[selectedSymbol].reasoning}
                   </p>
                   <p className="mt-2 text-xs text-gray-400">
-                    <span className="font-medium">Risk/Reward:</span> {signal.risk_reward}:1
+                    <span className="font-medium">Risk/Reward:</span> {signals[selectedSymbol].risk_reward}:1
                   </p>
                 </div>
               </div>
@@ -347,18 +351,37 @@ const SignalCard: React.FC<{
         </div>
         <div className="text-right">
           <div className="flex items-center justify-end gap-2">
-            {getSignalIcon(signal.signal)}
-            <span className={`text-xl font-bold ${getSignalColor(signal.signal)}`}>
+            {signal.signal === 'BUY' && <TrendingUp className="w-5 h-5 text-green-400" />}
+            {signal.signal === 'SELL' && <TrendingDown className="w-5 h-5 text-red-400" />}
+            {signal.signal !== 'BUY' && signal.signal !== 'SELL' && <Minus className="w-5 h-5 text-yellow-400" />}
+            <span className={`text-xl font-bold ${
+              signal.signal === 'BUY' ? 'text-green-400' : 
+              signal.signal === 'SELL' ? 'text-red-400' : 
+              'text-yellow-400'
+            }`}>
               {signal.signal}
             </span>
           </div>
           <div className="mt-2">
-            <span className={`text-sm font-medium ${getConfidenceColor(signal.confidence)}`}>
+            <span className={`text-sm font-medium ${
+              signal.confidence >= 70 ? 'text-green-400' :
+              signal.confidence >= 50 ? 'text-yellow-400' :
+              'text-red-400'
+            }`}>
               {signal.confidence}% confidence
             </span>
           </div>
           <div className="w-24 mt-1 ml-auto">
-            {getConfidenceBar(signal.confidence)}
+            <div className="w-full bg-[#0a0a1a] rounded-full h-1.5">
+              <div 
+                className={`${
+                  signal.confidence >= 70 ? 'bg-green-400' : 
+                  signal.confidence >= 50 ? 'bg-yellow-400' : 
+                  'bg-red-400'
+                } rounded-full h-1.5 transition-all duration-500`}
+                style={{ width: `${signal.confidence}%` }}
+              />
+            </div>
           </div>
         </div>
       </div>
