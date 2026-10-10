@@ -1147,7 +1147,6 @@ async def ai_status():
         "last_update": datetime.utcnow().isoformat(),
     }
 
-
 # ============================================
 # AUTO-TRADING + MANUAL-ORDER HELPERS
 # ============================================
