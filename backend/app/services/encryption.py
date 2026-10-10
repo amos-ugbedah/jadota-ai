@@ -46,10 +46,7 @@ def encrypt(plaintext: str) -> str:
 
 
 def decrypt(ciphertext: str) -> str:
-    """
-    Decrypt a ciphertext produced by encrypt(). Returns "" on failure
-    so a bad key doesn't crash every request that touches credentials.
-    """
+    """Decrypt a ciphertext produced by encrypt(). Returns "" on failure."""
     if not ciphertext:
         return ""
     try:

@@ -1,68 +1,39 @@
 """
-Symmetric encryption for secrets at rest (exchange API keys).
+Exchange API credentials — one row per user per exchange.
 
-Uses Fernet (AES-128-CBC + HMAC-SHA256) with a key derived from
-settings.encryption_key. Rotating the key requires re-encrypting all
-stored values — change it carefully.
+Secrets are encrypted at rest with Fernet (see services/encryption.py).
+Never returned to the client in plaintext.
 """
 
-import base64
-import hashlib
-import logging
-from typing import Optional
+from sqlalchemy import Column, String, Boolean, DateTime, Text
+from sqlalchemy.sql import func
+import uuid
 
-from cryptography.fernet import Fernet, InvalidToken
-
-from ..core.config import settings
-
-logger = logging.getLogger(__name__)
+from ..core.database import Base
 
 
-def _derive_fernet_key(raw: str) -> bytes:
-    """Turn an arbitrary-length secret into a valid Fernet key."""
-    if not raw:
-        raise ValueError("ENCRYPTION_KEY is not set — cannot encrypt credentials")
-    digest = hashlib.sha256(raw.encode("utf-8")).digest()
-    return base64.urlsafe_b64encode(digest)
+class ExchangeCredentials(Base):
+    __tablename__ = "exchange_credentials"
+    __table_args__ = {"extend_existing": True}
 
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), nullable=False, index=True)
+    exchange = Column(String(20), nullable=False, default="bitget", index=True)
 
-_fernet: Optional[Fernet] = None
+    api_key_encrypted = Column(Text, nullable=False)
+    api_secret_encrypted = Column(Text, nullable=False)
+    passphrase_encrypted = Column(Text, nullable=False)
 
+    api_key_masked = Column(String(50), nullable=True)
+    permissions = Column(String(100), nullable=True)
+    ip_whitelist = Column(String(200), nullable=True)
 
-def _get_fernet() -> Fernet:
-    global _fernet
-    if _fernet is None:
-        key = _derive_fernet_key(settings.encryption_key)
-        _fernet = Fernet(key)
-    return _fernet
+    is_active = Column(Boolean, default=True)
+    last_used_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
 
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
 
-def encrypt(plaintext: str) -> str:
-    """Encrypt a plaintext string. Returns urlsafe base64 ciphertext."""
-    if not plaintext:
-        return ""
-    token = _get_fernet().encrypt(plaintext.encode("utf-8"))
-    return token.decode("ascii")
-
-
-def decrypt(ciphertext: str) -> str:
-    """
-    Decrypt a ciphertext produced by encrypt(). Returns "" on failure
-    so a bad key doesn't crash every request that touches credentials.
-    """
-    if not ciphertext:
-        return ""
-    try:
-        return _get_fernet().decrypt(ciphertext.encode("ascii")).decode("utf-8")
-    except (InvalidToken, Exception) as e:
-        logger.error(f"Failed to decrypt credential: {type(e).__name__}")
-        return ""
-
-
-def mask(secret: str, visible: int = 4) -> str:
-    """Show only the first N chars; safe for logging."""
-    if not secret:
-        return ""
-    if len(secret) <= visible:
-        return "***"
-    return secret[:visible] + "***" + secret[-2:]
+    def __repr__(self):
+        return f"<ExchangeCredentials {self.exchange} user={self.user_id[:8]}>"

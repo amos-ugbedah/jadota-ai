@@ -2,8 +2,7 @@
 Per-user Bitget API client.
 
 Async, httpx-based. Each instance is constructed with the user's
-decrypted credentials and never reads from environment variables —
-that's the point of per-user integration.
+decrypted credentials and never reads from environment variables.
 
 Reference: https://www.bitget.com/api-doc/common/intro
 """
@@ -31,16 +30,10 @@ class BitgetError(Exception):
 
 
 class BitgetClient:
-    """
-    Async Bitget v2 client.
-
-    Usage:
-        async with BitgetClient(api_key, api_secret, passphrase, testnet=True) as c:
-            await c.get_account_info()
-    """
+    """Async Bitget v2 client. Use as `async with BitgetClient(...) as c:`."""
 
     LIVE_BASE = "https://api.bitget.com"
-    TESTNET_BASE = "https://api.bitget.com"  # same host; test keys route differently server-side
+    TESTNET_BASE = "https://api.bitget.com"
 
     def __init__(
         self,
@@ -69,14 +62,7 @@ class BitgetClient:
             await self._client.aclose()
             self._client = None
 
-    # ============================================
-    # Signing
-    # ============================================
     def _sign(self, timestamp: str, method: str, path: str, body: str = "") -> str:
-        """
-        Bitget v2 signing:
-            sign = base64(HMAC-SHA256(timestamp + method + path + body))
-        """
         message = f"{timestamp}{method.upper()}{path}{body}"
         mac = hmac.new(
             self.api_secret.encode("utf-8"),
@@ -139,11 +125,7 @@ class BitgetClient:
 
         return data.get("data") or {}
 
-    # ============================================
-    # Endpoints
-    # ============================================
     async def get_account_info(self) -> Dict[str, Any]:
-        """Fetch account balance / info. Used to test credentials."""
         return await self._request("GET", "/api/v2/account/all-account-balance")
 
     async def get_open_orders(self, symbol: Optional[str] = None) -> Dict[str, Any]:
@@ -152,12 +134,11 @@ class BitgetClient:
 
     async def place_spot_market_order(
         self,
-        symbol: str,          # e.g. "BTCUSDT"
-        side: str,            # "buy" or "sell"
-        size: str,            # amount as string
+        symbol: str,
+        side: str,
+        size: str,
         client_oid: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Place a spot market order."""
         body: Dict[str, Any] = {
             "symbol": symbol,
             "side": side.lower(),
@@ -167,14 +148,3 @@ class BitgetClient:
         if client_oid:
             body["clientOid"] = client_oid
         return await self._request("POST", "/api/v2/spot/trade/place-order", body=body)
-
-
-async def verify_credentials(
-    api_key: str,
-    api_secret: str,
-    passphrase: str,
-    testnet: bool = True,
-) -> Dict[str, Any]:
-    """Call Bitget with the given credentials. Returns account data or raises."""
-    async with BitgetClient(api_key, api_secret, passphrase, testnet=testnet) as c:
-        return await c.get_account_info()
