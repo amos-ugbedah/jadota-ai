@@ -1090,8 +1090,8 @@ async def get_demo_balance(
 # ============================================
 # AI TRADING ENDPOINTS
 # ============================================
-# 🔥 Route ordering matters: `/analyze/all` MUST be defined BEFORE
-# `/analyze/{symbol}`, otherwise FastAPI matches "all" as a symbol value.
+# 🔥 Route ordering matters: `/analyze/all` MUST come BEFORE `/analyze/{symbol}`,
+# otherwise FastAPI matches "all" as the {symbol} value.
 
 @app.get("/api/v1/ai/analyze/all")
 async def ai_analyze_all(
@@ -1100,8 +1100,7 @@ async def ai_analyze_all(
 ):
     """
     Get AI signals for the symbols the current user has selected,
-    using the strategy they have configured. Mirrors exactly what
-    auto-trade would evaluate.
+    using the strategy they configured. Mirrors what auto-trade sees.
     """
     from .models.ai_settings import AISettings
 
@@ -1110,13 +1109,14 @@ async def ai_analyze_all(
     )
 
     if settings:
-        symbols = settings.get_symbols_list() or ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
+        symbols = settings.get_symbols_list() or [
+            "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT",
+        ]
         strategy_name = getattr(settings, "strategy_type", None) or "balanced"
     else:
         symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
         strategy_name = "balanced"
 
-    # Pass the user's open positions so position-aware strategies (DCA) work
     user_positions = list_positions(db, user_id=current_user.id, status="OPEN")
 
     results = {}
@@ -1129,11 +1129,23 @@ async def ai_analyze_all(
         )
     return results
 
+
 @app.get("/api/v1/ai/analyze/{symbol}")
 async def ai_analyze_symbol(symbol: str, timeframe: str = "1h"):
     """Get AI trading signal for a single symbol (uses default strategy)"""
     result = await ai_trading_service.analyze_symbol(symbol, timeframe)
     return result
+
+
+# 🔥 This route was missing after the last reorder. Restored.
+@app.get("/api/v1/ai/status")
+async def ai_status():
+    """Get AI engine status"""
+    return {
+        "status": "running",
+        "symbols_analyzed": len(ai_trading_service.signals),
+        "last_update": datetime.utcnow().isoformat(),
+    }
 
 
 # ============================================
