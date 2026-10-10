@@ -1090,12 +1090,8 @@ async def get_demo_balance(
 # ============================================
 # AI TRADING ENDPOINTS
 # ============================================
-
-@app.get("/api/v1/ai/analyze/{symbol}")
-async def ai_analyze_symbol(symbol: str, timeframe: str = "1h"):
-    """Get AI trading signal for a symbol (uses default strategy)"""
-    result = await ai_trading_service.analyze_symbol(symbol, timeframe)
-    return result
+# 🔥 Route ordering matters: `/analyze/all` MUST be defined BEFORE
+# `/analyze/{symbol}`, otherwise FastAPI matches "all" as a symbol value.
 
 @app.get("/api/v1/ai/analyze/all")
 async def ai_analyze_all():
@@ -1106,6 +1102,12 @@ async def ai_analyze_all():
         result = await ai_trading_service.analyze_symbol(symbol)
         results[symbol] = result
     return results
+
+@app.get("/api/v1/ai/analyze/{symbol}")
+async def ai_analyze_symbol(symbol: str, timeframe: str = "1h"):
+    """Get AI trading signal for a symbol (uses default strategy)"""
+    result = await ai_trading_service.analyze_symbol(symbol, timeframe)
+    return result
 
 @app.get("/api/v1/ai/status")
 async def ai_status():
