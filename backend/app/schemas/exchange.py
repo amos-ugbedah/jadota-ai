@@ -1,7 +1,7 @@
 """Pydantic schemas for the exchange (Bitget) credential endpoints."""
 
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -33,3 +33,19 @@ class ExchangeConnectResponse(BaseModel):
 class ExchangeDisconnectResponse(BaseModel):
     success: bool
     message: str
+
+
+# 🔥 Task #4c: balance endpoint shapes
+class ExchangeBalanceItem(BaseModel):
+    asset: str
+    free: float
+    used: float
+    total: float
+
+
+class ExchangeBalanceResponse(BaseModel):
+    success: bool
+    exchange: str = "bitget"
+    testnet: bool = False
+    balances: List[ExchangeBalanceItem]
+    total_usdt_value: Optional[float] = None

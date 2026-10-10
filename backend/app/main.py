@@ -31,6 +31,8 @@ from .models.user import User
 from .models.position import Position  # noqa: F401
 # 🔥 Task #4a-1: ensure ExchangeCredentials model is registered before create_all()
 from .models.exchange_credentials import ExchangeCredentials  # noqa: F401
+# 🔥 Task #4c: ensure Payment model is registered before create_all()
+from .models.payment import Payment  # noqa: F401
 from .services.market_data_service import market_data_service
 from .services.ai_trading_service import ai_trading_service
 from .services.position_monitor import position_monitor
@@ -759,10 +761,30 @@ async def get_admin_users(db: Session = Depends(get_db)):
         for u in users
     ]
 
+# 🔥 Task #4c: real subscription list (was returning [])
 @app.get("/api/v1/admin/subscriptions", dependencies=[Depends(get_admin_user)])
-async def get_admin_subscriptions():
-    """Get all subscriptions (admin only)"""
-    return []
+async def get_admin_subscriptions(db: Session = Depends(get_db)):
+    """List users with a paid subscription plan (admin only)."""
+    from sqlalchemy import nullslast
+
+    users = (
+        db.query(User)
+        .filter(User.subscription_plan.isnot(None))
+        .order_by(nullslast(User.subscription_expires_at.desc()))
+        .all()
+    )
+    return [
+        {
+            "userId": u.id,
+            "email": u.email,
+            "fullName": u.full_name or u.username,
+            "plan": u.subscription_plan,
+            "expiresAt": u.subscription_expires_at.isoformat() if u.subscription_expires_at else None,
+            "isActive": bool(u.has_active_subscription),
+            "daysRemaining": u.days_until_subscription_expires,
+        }
+        for u in users
+    ]
 
 @app.get("/api/v1/admin/system/status", dependencies=[Depends(get_admin_user)])
 async def get_system_status():
@@ -777,13 +799,42 @@ async def get_system_status():
         "drawdown": 0
     }
 
+# 🔥 Task #4c: real revenue (was returning all zeros)
 @app.get("/api/v1/admin/revenue", dependencies=[Depends(get_admin_user)])
-async def get_revenue():
-    """Get revenue stats (admin only)"""
+async def get_revenue(db: Session = Depends(get_db)):
+    """Revenue stats from the payments table (admin only)."""
+    from sqlalchemy import func
+
+    completed = (
+        db.query(func.coalesce(func.sum(Payment.amount_usdt), 0.0))
+        .filter(Payment.status == "completed")
+        .scalar()
+    )
+    monthly = (
+        db.query(func.coalesce(func.sum(Payment.amount_usdt), 0.0))
+        .filter(
+            Payment.status == "completed",
+            Payment.completed_at >= datetime.utcnow() - timedelta(days=30),
+        )
+        .scalar()
+    )
+    pending = (
+        db.query(func.coalesce(func.sum(Payment.amount_usdt), 0.0))
+        .filter(Payment.status == "pending")
+        .scalar()
+    )
+    completed_count = (
+        db.query(func.count(Payment.id))
+        .filter(Payment.status == "completed")
+        .scalar()
+    )
+
     return {
-        "total": 0,
-        "monthly": 0,
-        "pending": 0
+        "total": round(float(completed or 0.0), 2),
+        "monthly": round(float(monthly or 0.0), 2),
+        "pending": round(float(pending or 0.0), 2),
+        "completedPayments": int(completed_count or 0),
+        "currency": "USDT",
     }
 
 @app.get("/api/v1/admin/system/health", dependencies=[Depends(get_admin_user)])
@@ -871,10 +922,19 @@ async def get_subscription_plans():
         }
     ]
 
+# 🔥 Task #4c: real current subscription (was returning None)
 @app.get("/api/v1/subscription/current")
-async def get_current_subscription():
-    """Get current user subscription"""
-    return None
+async def get_current_subscription(
+    current_user: User = Depends(get_current_user),
+):
+    """Return the current user's subscription details."""
+    return {
+        "plan": current_user.subscription_plan,
+        "expiresAt": current_user.subscription_expires_at.isoformat() if current_user.subscription_expires_at else None,
+        "isActive": bool(current_user.has_active_subscription),
+        "daysRemaining": current_user.days_until_subscription_expires,
+        "role": current_user.role,
+    }
 
 @app.post("/api/v1/subscription/cancel")
 async def cancel_subscription():
@@ -1434,7 +1494,7 @@ async def auto_trade(
         "message": message,
         "strategy": strategy_name,
         "trades": results,
-        "failures": failures,   # 🔥 new field — frontend can ignore
+        "failures": failures,
         "settings_used": {
             "confidence_threshold": confidence_threshold,
             "trade_amount": settings.trade_amount,

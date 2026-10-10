@@ -13,7 +13,7 @@ import hmac
 import json
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -88,7 +88,7 @@ class BitgetClient:
         path: str,
         params: Optional[Dict[str, Any]] = None,
         body: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    ) -> Any:
         if not self._client:
             raise RuntimeError("BitgetClient must be used as async context manager")
 
@@ -123,12 +123,12 @@ class BitgetClient:
                 resp.status_code,
             )
 
-        return data.get("data") or {}
+        return data.get("data")
 
-    async def get_account_info(self) -> Dict[str, Any]:
+    async def get_account_info(self) -> Any:
         return await self._request("GET", "/api/v2/account/all-account-balance")
 
-    async def get_open_orders(self, symbol: Optional[str] = None) -> Dict[str, Any]:
+    async def get_open_orders(self, symbol: Optional[str] = None) -> Any:
         params = {"symbol": symbol} if symbol else None
         return await self._request("GET", "/api/v2/spot/trade/unfilled-orders", params=params)
 
@@ -148,3 +148,44 @@ class BitgetClient:
         if client_oid:
             body["clientOid"] = client_oid
         return await self._request("POST", "/api/v2/spot/trade/place-order", body=body)
+
+    # 🔥 Task #4c: live wallet balances
+    async def get_spot_balances(self, coin: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Fetch spot wallet balances.
+
+        Returns a normalized list:
+            [{"asset": "USDT", "free": 1000.0, "used": 0.0, "total": 1000.0}, ...]
+
+        `used` is frozen + locked. `total` = free + used.
+        If `coin` is given, returns only that asset.
+        """
+        params = {"coin": coin} if coin else None
+        data = await self._request("GET", "/api/v2/spot/account/assets", params=params)
+
+        # Bitget returns either a list of assets or a single dict depending
+        # on whether `coin` was filtered. Normalize both shapes.
+        if isinstance(data, dict):
+            rows = [data]
+        elif isinstance(data, list):
+            rows = data
+        else:
+            rows = []
+
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            try:
+                free = float(row.get("available") or 0.0)
+                frozen = float(row.get("frozen") or 0.0)
+                locked = float(row.get("locked") or 0.0)
+                used = frozen + locked
+                total = free + used
+            except (TypeError, ValueError):
+                continue
+            out.append({
+                "asset": row.get("coin") or "",
+                "free": round(free, 8),
+                "used": round(used, 8),
+                "total": round(total, 8),
+            })
+        return out

@@ -12,25 +12,20 @@ Endpoints
     POST    /exchange/bitget/connect      Verify and store credentials
     POST    /exchange/bitget/test         Re-verify stored credentials
     DELETE  /exchange/bitget/disconnect   Forget credentials
+    GET     /exchange/bitget/balance      Live spot wallet balances
 
 Security model
 --------------
 * Raw API keys, secrets, and passphrases are never returned to the client.
-  Only the first N characters of the API key are exposed, masked.
-* The plaintext secret is never written to logs. Bitget's own error
-  messages are logged as-is — they do not contain the credential.
-* On disconnect, credentials are hard-deleted from the database, so a
-  user who revokes access does not leave encrypted secrets lying around.
-* The `/test` endpoint re-decrypts stored credentials and re-pings Bitget.
-  It is safe to expose: Bitget rejects the call if the user has rotated
-  or deleted the key on their side.
+* The plaintext secret is never written to logs.
+* On disconnect, credentials are hard-deleted from the database.
 """
 
 import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from ...api.dependencies import get_current_user
@@ -40,6 +35,8 @@ from ...models.exchange_credentials import ExchangeCredentials
 from ...models.user import User
 from ...schemas.exchange import (
     BitgetConnectRequest,
+    ExchangeBalanceItem,
+    ExchangeBalanceResponse,
     ExchangeConnectResponse,
     ExchangeDisconnectResponse,
     ExchangeStatusResponse,
@@ -51,13 +48,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/exchange", tags=["Exchange"])
 
-# How many leading characters of the API key to leave visible when masking
 _MASK_VISIBLE_CHARS = 6
-
-# Truncation limit for error strings persisted to the DB
 _MAX_ERROR_CHARS = 500
-
-# Canonical exchange identifier — used in the DB row and route prefixes
 _EXCHANGE_ID = "bitget"
 
 
@@ -65,7 +57,6 @@ _EXCHANGE_ID = "bitget"
 # Internal helpers
 # ============================================
 def _load_credential(db: Session, user_id: str) -> Optional[ExchangeCredentials]:
-    """Fetch the user's Bitget credential row, or None if not connected."""
     return (
         db.query(ExchangeCredentials)
         .filter(
@@ -77,7 +68,6 @@ def _load_credential(db: Session, user_id: str) -> Optional[ExchangeCredentials]
 
 
 def _to_status(cred: Optional[ExchangeCredentials]) -> ExchangeStatusResponse:
-    """Convert a credential row (or None) into the public status shape."""
     if cred is None:
         return ExchangeStatusResponse(
             connected=False,
@@ -98,20 +88,25 @@ def _to_status(cred: Optional[ExchangeCredentials]) -> ExchangeStatusResponse:
     )
 
 
-async def _verify_with_bitget(
-    api_key: str,
-    api_secret: str,
-    passphrase: str,
-) -> None:
-    """
-    Ping Bitget with the given credentials.
+def _decrypt_credential(cred: ExchangeCredentials):
+    """Returns (api_key, api_secret, passphrase) or raises HTTPException 500."""
+    api_key = decrypt(cred.api_key_encrypted)
+    api_secret = decrypt(cred.api_secret_encrypted)
+    passphrase = decrypt(cred.passphrase_encrypted)
+    if not (api_key and api_secret and passphrase):
+        logger.error(f"bitget.decrypt.failed user={cred.user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "Stored credentials cannot be decrypted. Please disconnect "
+                "and reconnect your Bitget account."
+            ),
+        )
+    return api_key, api_secret, passphrase
 
-    Raises:
-        HTTPException(400): Bitget explicitly rejected the credentials.
-        HTTPException(502): Bitget was unreachable (network, timeout, DNS).
 
-    The Bitget error code and message are logged but the raw API key is not.
-    """
+async def _verify_with_bitget(api_key: str, api_secret: str, passphrase: str) -> None:
+    """Ping Bitget with the given credentials. Raises HTTPException on failure."""
     try:
         async with BitgetClient(
             api_key=api_key,
@@ -121,7 +116,6 @@ async def _verify_with_bitget(
         ) as client:
             await client.get_account_info()
     except BitgetError as exc:
-        # Bitget's `msg` is a user-safe, upstream-provided string.
         logger.info(
             f"bitget.verify.rejected code={exc.code} http={exc.http_status} "
             f"msg={exc.msg}"
@@ -147,9 +141,7 @@ async def _verify_with_bitget(
     summary="Bitget connection status",
     description=(
         "Return whether the current user has a Bitget account connected, "
-        "along with non-sensitive metadata (masked key, permissions, "
-        "last-used timestamp, last error). Never returns the raw "
-        "credentials, even to the account owner."
+        "along with non-sensitive metadata. Never returns raw credentials."
     ),
 )
 async def get_bitget_status(
@@ -166,14 +158,11 @@ async def get_bitget_status(
 @router.post(
     "/bitget/connect",
     response_model=ExchangeConnectResponse,
-    status_code=status.HTTP_200_OK,
     summary="Connect a Bitget account",
     description=(
-        "Verify the supplied API key, secret, and passphrase against "
-        "Bitget, then persist them encrypted. Calling this when a "
-        "connection already exists will replace the stored credentials "
-        "(upsert). The verification happens *before* any DB write, so a "
-        "failed attempt leaves existing credentials untouched."
+        "Verify the supplied API key, secret, and passphrase against Bitget, "
+        "then persist them encrypted. Verification happens *before* any DB "
+        "write, so a failed attempt leaves existing credentials untouched."
     ),
     responses={
         400: {"description": "Bitget rejected the credentials"},
@@ -185,16 +174,11 @@ async def connect_bitget(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ExchangeConnectResponse:
-    # 1. Verify live with Bitget *first* — never persist unverified keys
     await _verify_with_bitget(body.api_key, body.api_secret, body.passphrase)
 
-    # 2. Upsert the credential row
     cred = _load_credential(db, current_user.id)
     if cred is None:
-        cred = ExchangeCredentials(
-            user_id=current_user.id,
-            exchange=_EXCHANGE_ID,
-        )
+        cred = ExchangeCredentials(user_id=current_user.id, exchange=_EXCHANGE_ID)
         db.add(cred)
 
     cred.api_key_encrypted = encrypt(body.api_key)
@@ -228,9 +212,7 @@ async def connect_bitget(
     summary="Re-verify Bitget credentials",
     description=(
         "Decrypt the stored credentials and ping Bitget to confirm they "
-        "still work. Useful when a user suspects their API key was "
-        "rotated, revoked, or their IP whitelist changed. On failure the "
-        "reason is saved and visible via `/status`."
+        "still work. On failure the reason is saved and visible via /status."
     ),
     responses={
         404: {"description": "No Bitget account connected"},
@@ -249,33 +231,15 @@ async def test_bitget(
             detail="No Bitget account connected.",
         )
 
-    api_key = decrypt(cred.api_key_encrypted)
-    api_secret = decrypt(cred.api_secret_encrypted)
-    passphrase = decrypt(cred.passphrase_encrypted)
-
-    if not (api_key and api_secret and passphrase):
-        # Reaches here only if ENCRYPTION_KEY changed on the server.
-        logger.error(f"bitget.decrypt.failed user={current_user.id}")
-        cred.last_error = "Decryption failed — server encryption key changed."
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=(
-                "Stored credentials cannot be decrypted. Please disconnect "
-                "and reconnect your Bitget account."
-            ),
-        )
+    api_key, api_secret, passphrase = _decrypt_credential(cred)
 
     try:
         await _verify_with_bitget(api_key, api_secret, passphrase)
     except HTTPException as exc:
-        # Persist the failure reason for the next /status read, then re-raise
-        # so the caller receives the correct HTTP status.
         cred.last_error = str(exc.detail)[:_MAX_ERROR_CHARS]
         db.commit()
         raise
 
-    # Success path — update metadata and return
     cred.last_used_at = datetime.utcnow()
     cred.last_error = None
     db.commit()
@@ -298,8 +262,7 @@ async def test_bitget(
     summary="Disconnect Bitget",
     description=(
         "Hard-delete the stored Bitget credentials for the current user. "
-        "This action is idempotent: calling it when no connection exists "
-        "still returns success, so retries are safe."
+        "Idempotent: calling it when no connection exists returns success."
     ),
 )
 async def disconnect_bitget(
@@ -326,4 +289,86 @@ async def disconnect_bitget(
     return ExchangeDisconnectResponse(
         success=True,
         message="No Bitget account was connected.",
+    )
+
+
+# ============================================
+# GET /exchange/bitget/balance  🔥 Task #4c
+# ============================================
+@router.get(
+    "/bitget/balance",
+    response_model=ExchangeBalanceResponse,
+    summary="Live spot wallet balance",
+    description=(
+        "Fetch the user's live Bitget spot wallet balances. Requires a "
+        "connected account. Optional `asset` query param filters to a "
+        "single coin (e.g. `?asset=USDT`)."
+    ),
+    responses={
+        404: {"description": "No Bitget account connected"},
+        502: {"description": "Bitget was unreachable or rejected the request"},
+    },
+)
+async def get_bitget_balance(
+    asset: Optional[str] = Query(None, description="Filter to one asset, e.g. USDT"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ExchangeBalanceResponse:
+    cred = _load_credential(db, current_user.id)
+    if cred is None or not cred.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No active Bitget account connected.",
+        )
+
+    api_key, api_secret, passphrase = _decrypt_credential(cred)
+
+    try:
+        async with BitgetClient(
+            api_key=api_key,
+            api_secret=api_secret,
+            passphrase=passphrase,
+            testnet=settings.bitget_testnet,
+        ) as client:
+            rows = await client.get_spot_balances(coin=asset)
+    except BitgetError as exc:
+        logger.info(
+            f"bitget.balance.rejected user={current_user.id} "
+            f"code={exc.code} msg={exc.msg}"
+        )
+        cred.last_error = f"{exc.code}: {exc.msg}"[:_MAX_ERROR_CHARS]
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Bitget rejected the request: {exc.msg}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(f"bitget.balance.unreachable user={current_user.id}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Could not reach Bitget: {type(exc).__name__}",
+        )
+
+    # Record successful use
+    cred.last_used_at = datetime.utcnow()
+    cred.last_error = None
+    db.commit()
+
+    # Only return non-zero balances (Bitget returns all coins, most are 0)
+    non_zero = [r for r in rows if r["total"] > 0]
+    balances = [ExchangeBalanceItem(**r) for r in non_zero]
+
+    # Sum USDT value if USDT is present — cheap sanity number for the UI
+    total_usdt = None
+    for b in balances:
+        if b.asset.upper() == "USDT":
+            total_usdt = b.total
+            break
+
+    return ExchangeBalanceResponse(
+        success=True,
+        exchange=_EXCHANGE_ID,
+        testnet=settings.bitget_testnet,
+        balances=balances,
+        total_usdt_value=total_usdt,
     )
