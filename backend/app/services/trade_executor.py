@@ -10,6 +10,7 @@ Used by:
 import logging
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from fastapi import HTTPException, status
 
@@ -39,6 +40,7 @@ async def place_bitget_order(
     side: str,
     trade_amount: float,
     base_size: float,
+    client_oid: Optional[str] = None,
 ) -> str:
     """
     Place a spot market order on Bitget for a connected user.
@@ -46,6 +48,13 @@ async def place_bitget_order(
     Side semantics (Bitget v2 spot):
       - BUY / ADD → order side "buy",  size is the QUOTE amount (USDT to spend)
       - SELL      → order side "sell", size is the BASE amount (coins to sell)
+
+    Args:
+        client_oid: optional idempotency token. When provided, it is used as
+                    the Bitget `clientOid` so a retry with the same value
+                    dedupes on Bitget's side. When not provided, a fresh one
+                    is generated (this preserves the old behavior for
+                    execute_ai_trade, which does not pass this).
 
     🔥 IMPORTANT: Bitget does not always return an `orderId` even for
     successful orders. When that happens, we log a warning and fall back
@@ -78,7 +87,9 @@ async def place_bitget_order(
     else:
         order_size = f"{base_size:.8f}"
 
-    client_oid = str(uuid.uuid4()).replace("-", "")[:30]
+    # 🔥 Task #5: use caller-supplied client_oid if present, else generate one.
+    # Bitget caps clientOid at 30 chars.
+    client_oid = (client_oid or uuid.uuid4().hex)[:30]
 
     # --- Call Bitget ---
     result: dict = {}

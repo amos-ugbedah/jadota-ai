@@ -61,6 +61,10 @@ export interface ManualOrderPayload {
   type?: 'MARKET' | 'LIMIT';
   stopLoss?: number;
   takeProfit?: number;
+  // 🔥 Task #5 — client-side idempotency token. When set, the backend uses it
+  // as the Bitget `clientOid` and dedupes retries via find_by_client_oid.
+  // Bitget caps clientOid at 30 chars; trading.tsx generates one that fits.
+  clientOid?: string;
 }
 
 export interface ManualOrderResponse {
@@ -79,6 +83,9 @@ export interface ManualOrderResponse {
   status: string;
   source: string;
   bitgetOrderId?: string | null;
+  // 🔥 Task #5 — echoed back from the backend, useful for client-side dedupe
+  // displays and for matching the response to the request that created it.
+  clientOid?: string | null;
   openedAt?: string | null;
   [key: string]: any;
 }

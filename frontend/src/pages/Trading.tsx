@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTradingStore } from '@/store/tradingStore';
 import { useAuthStore } from '@/store/authStore';
 import { marketApi } from '@/api/market';
@@ -10,6 +10,20 @@ import { Info, Shield, Sparkles, TrendingUp, TrendingDown, Loader2 } from 'lucid
 import PositionSourceBadge from '@/components/PositionSourceBadge';
 
 const MODE_STORAGE_KEY = 'jadota-trading-mode';
+
+// 🔥 Task #5 — client-side idempotency token generator.
+// Bitget caps clientOid at 30 chars. crypto.randomUUID() requires a secure
+// context (HTTPS / localhost); the fallback covers everything else.
+const generateClientOid = (): string => {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID().replace(/-/g, '').slice(0, 30);
+    }
+  } catch {
+    /* fall through to fallback */
+  }
+  return `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`.slice(0, 30);
+};
 
 const Trading: React.FC = () => {
   const { user } = useAuthStore();
@@ -47,6 +61,11 @@ const Trading: React.FC = () => {
   const [liveUsdt, setLiveUsdt] = useState<number | null>(null);
   const [isLiveSubmitting, setIsLiveSubmitting] = useState(false);
 
+  // 🔥 Task #5 — holds the idempotency token for the current live submission.
+  // Generated on submit, kept across retries after a failure, cleared on
+  // success and whenever the user edits the order form.
+  const pendingClientOidRef = useRef<string | null>(null);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -59,6 +78,15 @@ const Trading: React.FC = () => {
         toast.error('Live mode currently supports Market orders only');
         return;
       }
+
+      // 🔥 Task #5 — reuse the pending clientOid if a previous attempt failed,
+      // otherwise generate a fresh one. This makes network retries safe: the
+      // backend's find_by_client_oid will dedupe instead of placing a 2nd order.
+      if (!pendingClientOidRef.current) {
+        pendingClientOidRef.current = generateClientOid();
+      }
+      const clientOid = pendingClientOidRef.current;
+
       setIsLiveSubmitting(true);
       try {
         const result = await exchangeApi.placeManualOrder({
@@ -68,7 +96,11 @@ const Trading: React.FC = () => {
           type: 'MARKET',
           stopLoss,
           takeProfit,
+          // 🔥 Task #5 — idempotency token
+          clientOid,
         });
+        // 🔥 Success — clear so the NEXT order gets a fresh token.
+        pendingClientOidRef.current = null;
         toast.success(
           `✅ Live ${side} order placed on Bitget · #${(result.bitgetOrderId || '').slice(0, 8)}`
         );
@@ -78,6 +110,7 @@ const Trading: React.FC = () => {
           loadLiveBalance(),
         ]);
       } catch (error: any) {
+        // 🔥 Keep pendingClientOidRef so a retry sends the same token.
         toast.error(error?.message || 'Live order failed');
       } finally {
         setIsLiveSubmitting(false);
@@ -156,6 +189,12 @@ const Trading: React.FC = () => {
       window.localStorage.setItem(MODE_STORAGE_KEY, tradingMode);
     } catch { /* localStorage unavailable — no-op */ }
   }, [tradingMode]);
+
+  // 🔥 Task #5 — whenever the user edits the order form, treat the next submit
+  // as a NEW order intent: drop the pending clientOid so a fresh one is issued.
+  useEffect(() => {
+    pendingClientOidRef.current = null;
+  }, [symbol, side, orderType, size, stopLoss, takeProfit]);
 
   // 🔥 If Bitget disconnects while user is on 'live', force back to 'demo'
   useEffect(() => {

@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from .core.config import settings, get_cors_origins, get_allowed_hosts
 from .core.database import engine, Base, SessionLocal
 from .core.security import (
-    get_password_hash, verify_password, create_access_token, 
+    get_password_hash, verify_password, create_access_token,
     create_refresh_token, decode_token, get_token_from_header
 )
 from .models.user import User
@@ -38,12 +38,14 @@ from .services.ai_trading_service import ai_trading_service
 from .services.position_monitor import position_monitor
 from .services.telegram_service import telegram_service
 # 🔥 Task #3: DB-backed position store replaces the in-memory list
+# 🔥 Task #5: find_by_client_oid added for manual-order idempotency
 from .services.position_store import (
     list_positions,
     get_position,
     create_position,
     update_position,
     close_position,
+    find_by_client_oid,
 )
 # 🔥 Task #4a-2: live order routing helpers
 from .services.encryption import decrypt
@@ -154,6 +156,8 @@ def _run_startup_migrations():
         "source": "VARCHAR(20) DEFAULT 'demo'",
         "reconciliation_status": "VARCHAR(20)",
         "last_reconciled_at": "TIMESTAMP",
+        # 🔥 Task #5 — idempotency column
+        "client_oid": "VARCHAR(30)",
     }
 
     expected_exchange_credentials = {
@@ -1297,6 +1301,10 @@ async def get_performance():
 # see exactly which line fails when it raises an unhandled exception.
 # Every stage logs its own line: validation, credential lookup, price fetch,
 # Bitget order, DB write, and Telegram alert.
+#
+# 🔥 Task #5: idempotency via `clientOid`. If the client supplies the same
+# clientOid twice (e.g. double-click, network retry), we return the existing
+# row instead of placing a second Bitget order.
 
 @app.post("/api/v1/trading/manual-order")
 async def place_manual_order(
@@ -1317,6 +1325,9 @@ async def place_manual_order(
     size_raw = request.get("size")
     stop_loss_raw = request.get("stopLoss")
     take_profit_raw = request.get("takeProfit")
+    # 🔥 Task #5 — idempotency token (optional). Bitget caps clientOid at 30 chars.
+    client_oid_raw = request.get("clientOid") or request.get("client_oid")
+    client_oid = (str(client_oid_raw).strip()[:30] if client_oid_raw else None)
 
     if side not in ("BUY", "SELL"):
         raise HTTPException(status_code=400, detail="Side must be BUY or SELL")
@@ -1331,7 +1342,24 @@ async def place_manual_order(
             status_code=400,
             detail="Live mode currently supports MARKET orders only.",
         )
-    logger.info(f"manual_order[{req_id}] validation OK symbol={symbol} side={side} size={size}")
+    logger.info(
+        f"manual_order[{req_id}] validation OK symbol={symbol} side={side} "
+        f"size={size} client_oid={client_oid}"
+    )
+
+    # ── Step 1b: idempotency check ───────────────────────────
+    # If the same client_oid was already used by this user, we return the
+    # existing row instead of placing a new Bitget order. This is what makes
+    # client-side retries safe.
+    if client_oid:
+        existing = find_by_client_oid(db, current_user.id, client_oid)
+        if existing:
+            logger.info(
+                f"manual_order[{req_id}] IDEMPOTENT HIT — returning existing "
+                f"position_id={existing.get('id')} for client_oid={client_oid}"
+            )
+            return existing
+        logger.info(f"manual_order[{req_id}] no existing row for client_oid={client_oid} — proceeding")
 
     # ── Step 2: load user's Bitget credentials ───────────────
     cred = (
@@ -1377,6 +1405,7 @@ async def place_manual_order(
         side=side,
         trade_amount=trade_amount,
         base_size=base_size,
+        client_oid=client_oid,   # 🔥 Task #5 — thread idempotency token through
     )
     logger.info(f"manual_order[{req_id}] bitget OK order_id={bitget_order_id}")
 
@@ -1444,6 +1473,8 @@ async def place_manual_order(
         "aiReasoning": "Manual order via Trading panel",
         "bitgetOrderId": bitget_order_id,
         "source": "bitget",
+        # 🔥 Task #5 — persist the idempotency token so retries hit find_by_client_oid
+        "clientOid": client_oid,
     }
 
     try:
@@ -1476,6 +1507,7 @@ async def place_manual_order(
                 "status": "UNCONFIRMED",
                 "source": "bitget",
                 "bitgetOrderId": bitget_order_id,
+                "clientOid": client_oid,
                 "openedAt": datetime.utcnow().isoformat(),
                 "warning": (
                     "Order placed on Bitget but not saved to local DB: "

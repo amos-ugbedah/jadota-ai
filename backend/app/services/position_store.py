@@ -2,13 +2,14 @@
 Persistent position store.
 
 Positions live in the `positions` Postgres table. All API consumers
-(main.py, analytics.py, position_monitor.py, reconciliation.py) go
-through these helpers, which convert between the DB rows and the
+(main.py, analytics.py, position_monitor.py, reconciliation.py, auto_trader)
+go through these helpers, which convert between the DB rows and the
 camelCase dicts the API and frontend use.
 
 Public API (first arg is always a SQLAlchemy Session):
     list_positions(db, user_id=None, status=None, limit=None) -> List[Dict]
     get_position(db, position_id) -> Optional[Dict]
+    find_by_client_oid(db, user_id, client_oid) -> Optional[Dict]
     create_position(db, data) -> Dict
     update_position(db, position_id, updates) -> Optional[Dict]
     close_position(db, position_id, reason, exit_price=None) -> Optional[Dict]
@@ -55,6 +56,8 @@ def row_to_dict(row: Position) -> Dict[str, Any]:
         # 🔥 Task #4b
         "reconciliationStatus": row.reconciliation_status,
         "lastReconciledAt": row.last_reconciled_at.isoformat() if row.last_reconciled_at else None,
+        # 🔥 Task #5
+        "clientOid": row.client_oid,
         "createdAt": row.created_at.isoformat() if row.created_at else None,
         "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -101,6 +104,32 @@ def get_position_row(db: Session, position_id: str) -> Optional[Position]:
     return db.query(Position).filter(Position.id == position_id).first()
 
 
+# 🔥 Task #5: idempotency lookup
+def find_by_client_oid(
+    db: Session,
+    user_id: str,
+    client_oid: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Idempotency lookup — return the row created for this client_oid, if any.
+
+    Used by the manual-order endpoint to detect retries. If the same
+    client_oid is submitted twice, the second call should return the row
+    from the first attempt rather than placing another Bitget order.
+    """
+    if not client_oid:
+        return None
+    row = (
+        db.query(Position)
+        .filter(
+            Position.user_id == user_id,
+            Position.client_oid == client_oid,
+        )
+        .first()
+    )
+    return row_to_dict(row) if row else None
+
+
 # ============================================
 # Writes
 # ============================================
@@ -133,6 +162,8 @@ def create_position(db: Session, data: Dict[str, Any]) -> Dict[str, Any]:
         # 🔥 Task #4b
         reconciliation_status=data.get("reconciliationStatus"),
         last_reconciled_at=_parse_dt(data.get("lastReconciledAt")),
+        # 🔥 Task #5
+        client_oid=data.get("clientOid"),
     )
     db.add(row)
     db.commit()
@@ -163,6 +194,8 @@ _CAMEL_TO_SNAKE = {
     "source": "source",
     # 🔥 Task #4b
     "reconciliationStatus": "reconciliation_status",
+    # 🔥 Task #5
+    "clientOid": "client_oid",
 }
 
 

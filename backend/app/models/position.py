@@ -7,6 +7,11 @@ via row_to_dict() in services/position_store.py.
 Task #4b additions:
     reconciliation_status — "synced" | "orphaned" | "error" | NULL (demo)
     last_reconciled_at    — timestamp of last Bitget check
+
+Task #5 additions:
+    client_oid — idempotency key for manual orders. Used to prevent
+                 duplicate real orders if the frontend retries. Also lets
+                 Bitget dedupe retries on their side.
 """
 
 from sqlalchemy import Column, String, Float, DateTime, Text
@@ -51,7 +56,7 @@ class Position(Base):
 
     # Lifecycle
     status = Column(String(20), default="OPEN", index=True)
-    close_reason = Column(String(30), nullable=True)  # STOP_LOSS / TAKE_PROFIT / MANUAL / RECONCILED_CANCELLED
+    close_reason = Column(String(30), nullable=True)  # STOP_LOSS / TAKE_PROFIT / MANUAL / RECONCILED_CANCELLED / BITGET_REJECTED / BITGET_ERROR
     opened_at = Column(DateTime, default=func.now())
     closed_at = Column(DateTime, nullable=True)
 
@@ -62,6 +67,9 @@ class Position(Base):
     # 🔥 Task #4b: reconciliation metadata
     reconciliation_status = Column(String(20), nullable=True, index=True)
     last_reconciled_at = Column(DateTime, nullable=True)
+
+    # 🔥 Task #5: idempotency key for manual orders
+    client_oid = Column(String(50), nullable=True, index=True)
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
