@@ -78,3 +78,4 @@ Thumbs.db
 backend/.env.backup*
 backend/.env.bak
 .env.backup*
+jadota-diagnostic-*.txt
