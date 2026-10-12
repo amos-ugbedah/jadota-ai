@@ -1293,6 +1293,11 @@ async def get_performance():
 # ============================================
 # MANUAL TRADING (LIVE)
 # ============================================
+# 🔥 This endpoint has been instrumented with step-by-step logging so we can
+# see exactly which line fails when it raises an unhandled exception.
+# Every stage logs its own line: validation, credential lookup, price fetch,
+# Bitget order, DB write, and Telegram alert.
+
 @app.post("/api/v1/trading/manual-order")
 async def place_manual_order(
     request: dict,
@@ -1302,6 +1307,10 @@ async def place_manual_order(
     """Place a live manual order via the Trading panel."""
     from .models.ai_settings import AISettings
 
+    req_id = str(uuid.uuid4())[:8]
+    logger.info(f"manual_order[{req_id}] START user={current_user.id[:8]} payload={request}")
+
+    # ── Step 1: parse + validate ─────────────────────────────
     symbol = request.get("symbol", "BTC/USDT")
     side = (request.get("side") or "BUY").upper()
     order_type = (request.get("type") or "MARKET").upper()
@@ -1322,7 +1331,9 @@ async def place_manual_order(
             status_code=400,
             detail="Live mode currently supports MARKET orders only.",
         )
+    logger.info(f"manual_order[{req_id}] validation OK symbol={symbol} side={side} size={size}")
 
+    # ── Step 2: load user's Bitget credentials ───────────────
     cred = (
         db.query(ExchangeCredentials)
         .filter(
@@ -1337,21 +1348,28 @@ async def place_manual_order(
             status_code=400,
             detail="No active Bitget connection. Connect one in Settings → API Keys.",
         )
+    logger.info(f"manual_order[{req_id}] credential found id={cred.id[:8]}")
 
+    # ── Step 3: current price ────────────────────────────────
     current_price = market_data_service.get_price(symbol)
     if current_price == 0:
         raise HTTPException(
             status_code=400,
             detail=f"Could not fetch a live price for {symbol}. Try again in a moment.",
         )
+    logger.info(f"manual_order[{req_id}] price={current_price}")
 
+    # ── Step 4: compute sizes ────────────────────────────────
     if side == "BUY":
         trade_amount = size * current_price
         base_size = size
     else:
         trade_amount = 0.0
         base_size = size
+    logger.info(f"manual_order[{req_id}] trade_amount={trade_amount} base_size={base_size}")
 
+    # ── Step 5: place order on Bitget (this is where real money moves) ──
+    logger.info(f"manual_order[{req_id}] calling bitget.place_order ...")
     bitget_order_id = await _place_bitget_order(
         cred=cred,
         db=db,
@@ -1360,13 +1378,22 @@ async def place_manual_order(
         trade_amount=trade_amount,
         base_size=base_size,
     )
+    logger.info(f"manual_order[{req_id}] bitget OK order_id={bitget_order_id}")
 
-    user_settings = (
-        db.query(AISettings).filter(AISettings.user_id == current_user.id).first()
-    )
+    # ── Step 6: read user's AI settings for SL/TP defaults ───
+    user_settings = None
+    try:
+        user_settings = (
+            db.query(AISettings).filter(AISettings.user_id == current_user.id).first()
+        )
+    except Exception as exc:
+        logger.exception(f"manual_order[{req_id}] FAILED to query AISettings: {exc}")
+        # Non-fatal — continue with defaults
     stop_loss_pct = ((user_settings.stop_loss_percent or 2.0) / 100) if user_settings else 0.02
     take_profit_pct = ((user_settings.take_profit_percent or 4.0) / 100) if user_settings else 0.04
+    logger.info(f"manual_order[{req_id}] sl_pct={stop_loss_pct} tp_pct={take_profit_pct}")
 
+    # ── Step 7: override SL/TP if user gave absolute prices ──
     try:
         if stop_loss_raw not in (None, "", 0):
             stop_loss_abs = float(stop_loss_raw)
@@ -1389,8 +1416,13 @@ async def place_manual_order(
         sl_price = round(current_price * (1 + stop_loss_pct), 8)
         tp_price = round(current_price * (1 - take_profit_pct), 8)
         notional = round(size * current_price, 8)
+    logger.info(f"manual_order[{req_id}] sl_price={sl_price} tp_price={tp_price} notional={notional}")
 
-    position = create_position(db, {
+    # ── Step 8: write the position to our DB ─────────────────
+    # 🔥 CRITICAL: if this fails, we MUST still tell the user that Bitget
+    # succeeded — otherwise they'll retry and buy twice. We catch here,
+    # log the traceback, and return 200 with a partial-success flag.
+    position_payload = {
         "id": str(uuid.uuid4()),
         "user_id": current_user.id,
         "symbol": symbol,
@@ -1412,20 +1444,57 @@ async def place_manual_order(
         "aiReasoning": "Manual order via Trading panel",
         "bitgetOrderId": bitget_order_id,
         "source": "bitget",
-    })
-
-    logger.info(
-        f"🎯 manual.order user={current_user.id[:8]} "
-        f"{side} {symbol} size={size} @ ~${current_price:.4f} "
-        f"bitget_order={bitget_order_id}"
-    )
+    }
 
     try:
-        await telegram_service.send_trade_alert(position, "OPEN")
+        logger.info(f"manual_order[{req_id}] create_position payload keys={list(position_payload.keys())}")
+        position = create_position(db, position_payload)
+        logger.info(f"manual_order[{req_id}] DB write OK position_id={position['id']}")
     except Exception as exc:
-        logger.warning(f"manual.order.telegram.error: {exc}")
+        # 🔥 THIS is the traceback we've been chasing. Log it with the full
+        # stack so it appears in Render logs even if Loki is flaky.
+        tb = traceback.format_exc()
+        logger.error(
+            f"manual_order[{req_id}] DB WRITE FAILED — Bitget order "
+            f"{bitget_order_id} SUCCEEDED but position row was NOT saved.\n{tb}"
+        )
+        # Return 200 with partial success so the frontend knows money moved
+        return JSONResponse(
+            status_code=200,
+            content={
+                "id": None,
+                "symbol": symbol,
+                "side": side,
+                "size": size,
+                "entryPrice": current_price,
+                "currentPrice": current_price,
+                "unrealizedPnl": 0.0,
+                "realizedPnl": 0.0,
+                "tradeAmount": notional,
+                "stopLoss": sl_price,
+                "takeProfit": tp_price,
+                "status": "UNCONFIRMED",
+                "source": "bitget",
+                "bitgetOrderId": bitget_order_id,
+                "openedAt": datetime.utcnow().isoformat(),
+                "warning": (
+                    "Order placed on Bitget but not saved to local DB: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            },
+        )
 
+    # ── Step 9: Telegram alert (non-fatal) ───────────────────
+    try:
+        logger.info(f"manual_order[{req_id}] sending telegram alert ...")
+        await telegram_service.send_trade_alert(position, "OPEN")
+        logger.info(f"manual_order[{req_id}] telegram OK")
+    except Exception as exc:
+        logger.warning(f"manual_order[{req_id}] telegram failed (non-fatal): {exc}")
+
+    logger.info(f"manual_order[{req_id}] DONE")
     return position
+
 
 # ============================================
 # ROUTERS
